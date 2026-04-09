@@ -2,15 +2,12 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 type ImportRow = {
-  sku: string;
-  name: string;
-  brand: string | null;
-  vendor: string | null;
+  brand_name: string | null;
+  product_name: string;
   category: string | null;
-  price: number | null;
-  inventory: number;
-  reorder_point: number;
-  is_active: boolean;
+  distro: string | null;
+  current_price: number;
+  active: boolean;
 };
 
 const supabase = createClient(
@@ -18,7 +15,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-function cleanRow(row: Partial<ImportRow>): ImportRow | null {
+function cleanRow(row: any): ImportRow | null {
   const sku = String(row.sku ?? "").trim();
   const name = String(row.name ?? "").trim();
 
