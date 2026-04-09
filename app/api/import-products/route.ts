@@ -71,6 +71,51 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+    const { data: productsData, error: fetchError } = await supabase
+  .from("products")
+  .select("id, brand_name, product_name");
+
+if (fetchError) {
+  return NextResponse.json(
+    { error: fetchError.message },
+    { status: 500 }
+  );
+}
+
+const productMap = new Map(
+  productsData.map((p: any) => [`${p.brand_name}__${p.product_name}`, p.id])
+);
+
+const inventoryRows = rows
+  .map((row: any) => {
+    const brand = String(row.brand ?? "").trim();
+    const name = String(row.name ?? "").trim();
+    const key = `${brand}__${name}`;
+    const product_id = productMap.get(key);
+
+    if (!product_id) return null;
+
+    return {
+      product_id,
+      on_hand: Number(row.inventory ?? 0),
+      par_level: Number(row.reorder_point ?? 0),
+    };
+  })
+  .filter((row: any) => Boolean(row));
+
+const { error: inventoryError } = await supabase
+  .from("inventory")
+  .upsert(inventoryRows, {
+    onConflict: "product_id",
+    ignoreDuplicates: false,
+  });
+
+if (inventoryError) {
+  return NextResponse.json(
+    { error: inventoryError.message },
+    { status: 500 }
+  );
+}
 
     return NextResponse.json({
       ok: true,
