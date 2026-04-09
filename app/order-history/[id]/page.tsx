@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import PageShell from "@/components/PageShell";
 
 export default async function OrderDetailPage({
   params,
@@ -37,21 +38,17 @@ export default async function OrderDetailPage({
 
   if (orderError || !order) {
     return (
-      <main style={{ padding: 24, fontFamily: "sans-serif" }}>
-        <h1>Order Detail</h1>
-        <p>Order not found.</p>
+      <PageShell title="Order Detail" subtitle="Order not found.">
         <p><Link href="/order-history">← Back to Order History</Link></p>
-      </main>
+      </PageShell>
     );
   }
 
   if (profile?.role === "buyer" && order.created_by !== user.id) {
     return (
-      <main style={{ padding: 24, fontFamily: "sans-serif" }}>
-        <h1>Order Detail</h1>
-        <p>You do not have access to this order.</p>
+      <PageShell title="Order Detail" subtitle="You do not have access to this order.">
         <p><Link href="/order-history">← Back to Order History</Link></p>
-      </main>
+      </PageShell>
     );
   }
 
@@ -82,27 +79,58 @@ export default async function OrderDetailPage({
   }, 0);
 
   return (
-    <main style={{ padding: 24, fontFamily: "sans-serif" }}>
-      <h1>Order Detail</h1>
-      <p><Link href="/order-history">← Back to Order History</Link></p>
+    <PageShell
+      title="Order Detail"
+      subtitle="Review line items, status, approval history, and export approved orders."
+    >
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+        <Link href="/order-history" style={secondaryBtn}>
+          ← Back to Order History
+        </Link>
 
-      <div style={{ marginTop: 16 }}>
-        <p><strong>Order ID:</strong> {order.id}</p>
-        <p><strong>Status:</strong> {order.status}</p>
-        <p><strong>Created:</strong> {order.created_at}</p>
-        <p><strong>Approved:</strong> {order.approved_at ?? "-"}</p>
-        <p><strong>Manager Note:</strong> {order.manager_note ?? "-"}</p>
-        <p><strong>Total Value:</strong> ${totalValue.toFixed(2)}</p>
+        {order.status === "approved" ? (
+          <a
+            href={`/api/export-order/${order.id}`}
+            style={primaryBtn}
+          >
+            Export Approved Order
+          </a>
+        ) : (
+          <span style={disabledBtn}>Export available after approval</span>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 16,
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          marginBottom: 24,
+        }}
+      >
+        <InfoCard label="Order ID" value={order.id} />
+        <InfoCard label="Status" value={order.status} />
+        <InfoCard label="Created" value={order.created_at} />
+        <InfoCard label="Approved" value={order.approved_at ?? "-"} />
+        <InfoCard label="Total Value" value={`$${totalValue.toFixed(2)}`} />
+      </div>
+
+      <div style={noteCard}>
+        <strong>Manager Note:</strong> {order.manager_note ?? "-"}
       </div>
 
       {linesError ? (
-        <pre style={{ color: "red" }}>{JSON.stringify(linesError, null, 2)}</pre>
+        <div style={errorBox}>
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+            {JSON.stringify(linesError, null, 2)}
+          </pre>
+        </div>
       ) : null}
 
-      <h2 style={{ marginTop: 24 }}>Line Items</h2>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
+      <h2 style={sectionTitle}>Line Items</h2>
+      <div style={tableWrap}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+          <thead style={{ background: "#f8fafc" }}>
             <tr>
               <th style={th}>Brand</th>
               <th style={th}>Product</th>
@@ -131,10 +159,10 @@ export default async function OrderDetailPage({
         </table>
       </div>
 
-      <h2 style={{ marginTop: 24 }}>Approval History</h2>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
+      <h2 style={sectionTitle}>Approval History</h2>
+      <div style={tableWrap}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
+          <thead style={{ background: "#f8fafc" }}>
             <tr>
               <th style={th}>Action</th>
               <th style={th}>Note</th>
@@ -152,18 +180,93 @@ export default async function OrderDetailPage({
           </tbody>
         </table>
       </div>
-    </main>
+    </PageShell>
   );
 }
+
+function InfoCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        border: "1px solid #e5e7eb",
+        borderRadius: 14,
+        padding: 18,
+        background: "#f8fafc",
+      }}
+    >
+      <div style={{ color: "#64748b", fontSize: 14 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, marginTop: 8 }}>{value}</div>
+    </div>
+  );
+}
+
+const tableWrap = {
+  overflowX: "auto" as const,
+  border: "1px solid #e5e7eb",
+  borderRadius: 12,
+};
+
+const sectionTitle = {
+  marginTop: 24,
+  marginBottom: 12,
+};
+
+const noteCard = {
+  marginBottom: 18,
+  padding: 12,
+  borderRadius: 10,
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+};
+
+const errorBox = {
+  marginBottom: 18,
+  padding: 12,
+  borderRadius: 10,
+  background: "#fee2e2",
+  border: "1px solid #fecaca",
+  color: "#991b1b",
+};
 
 const th = {
   borderBottom: "1px solid #ddd",
   textAlign: "left" as const,
-  padding: "10px",
+  padding: "12px 10px",
+  fontSize: 14,
 };
 
 const td = {
   borderBottom: "1px solid #eee",
   padding: "10px",
+  fontSize: 14,
+};
+
+const primaryBtn = {
+  display: "inline-block",
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: "1px solid #0f172a",
+  background: "#0f172a",
+  color: "#fff",
+  textDecoration: "none",
+};
+
+const secondaryBtn = {
+  display: "inline-block",
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: "1px solid #cbd5e1",
+  background: "#fff",
+  color: "#0f172a",
+  textDecoration: "none",
+};
+
+const disabledBtn = {
+  display: "inline-block",
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  background: "#f8fafc",
+  color: "#64748b",
 };
 

@@ -1,159 +1,91 @@
-
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "@supabase/supabase-js";
 
-function normalize(value: unknown) {
-  return String(value ?? "").trim().toLowerCase();
+type ImportRow = {
+  sku: string;
+  name: string;
+  brand: string | null;
+  vendor: string | null;
+  category: string | null;
+  price: number | null;
+  inventory: number;
+  reorder_point: number;
+  is_active: boolean;
+};
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+function cleanRow(row: Partial<ImportRow>): ImportRow | null {
+  const sku = String(row.sku ?? "").trim();
+  const name = String(row.name ?? "").trim();
+
+  if (!sku || !name) return null;
+
+  return {
+  brand_name: row.brand?.trim() || null,
+  product_name: row.name,
+  category: row.category?.trim() || null,
+  distro: row.vendor?.trim() || null,
+  current_price: typeof row.price === "number" ? row.price : 0,
+  active: row.is_active !== false,
+};
 }
 
-function assignDistro(brand: string) {
-  const rules: Record<string, string> = {
-    // Kiva
-    "kiva": "Kiva Sales & Service",
-    "garden society": "Kiva Sales & Service",
-    "seed junky": "Kiva Sales & Service",
-    "uncle arnie's": "Kiva Sales & Service",
-    "nasha": "Kiva Sales & Service",
-    "cann": "Kiva Sales & Service",
-    "the tablet": "Kiva Sales & Service",
-    "emerald sky": "Kiva Sales & Service",
-    "gelato": "Kiva Sales & Service",
-    "keef": "Kiva Sales & Service",
-    "level": "Kiva Sales & Service",
-    "big pete's": "Kiva Sales & Service",
-    "autumn brands": "Kiva Sales & Service",
-    "pax labs": "Kiva Sales & Service",
-    "the pairist": "Kiva Sales & Service",
-    "clsics": "Kiva Sales & Service",
-    "el blunto": "Kiva Sales & Service",
-    "presha": "Kiva Sales & Service",
-    "tiny fires": "Kiva Sales & Service",
-    "awesome dope": "Kiva Sales & Service",
-    "ultra": "Kiva Sales & Service",
-    "northern harvest": "Kiva Sales & Service",
-    "saida": "Kiva Sales & Service",
-
-    // Nabis
-    "auntie aloha": "Nabis",
-    "dompen/ koa": "Nabis",
-    "delighted": "Nabis",
-    "liquid flower": "Nabis",
-    "mary's medicinals": "Nabis",
-    "kikoko": "Nabis",
-    "green vibe": "Nabis",
-    "moon valley": "Nabis",
-    "om": "Nabis",
-    "raw garden": "Nabis",
-    "yummi karma": "Nabis",
-    "vet cbd & statehouse": "Nabis",
-
-    // overlaps routed where you asked
-    "arcata fire": "Nabis",
-    "pacific stone": "Nabis",
-
-    // UpNorth
-    "upnorth": "UpNorth",
-    "fig farm": "UpNorth",
-    "globs & daze off": "UpNorth",
-
-    // Big Oil
-    "bear labs": "Big Oil",
-    "wvy": "Big Oil",
-
-    // Boutiq & Sherbinski
-    "boutiq": "Boutiq & Sherbinski",
-    "sherbinski": "Boutiq & Sherbinski",
-  };
-
-  return rules[normalize(brand)] ?? "Other";
-}
-
-function parsePrice(row: Record<string, unknown>) {
-  const candidates = [
-    row.base_price,
-    row.unit_price,
-    row.Price,
-    row.current_price,
-    row["1.0_g_price"],
-    row["0.125_oz_price"],
-    row["0.25_oz_price"],
-    row["0.5_g_price"],
-  ];
-
-  for (const value of candidates) {
-    const cleaned = String(value ?? "").replace(/[$,]/g, "");
-    const num = Number(cleaned);
-    if (Number.isFinite(num) && num > 0) return num;
+function chunkArray<T>(items: T[], size: number) {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
   }
-
-  return 0;
+  return out;
 }
 
-function parseCategory(row: Record<string, unknown>) {
-  const raw = normalize(
-    row.category ||
-      row.Category ||
-      row.categories ||
-      row["Product Type"] ||
-      ""
-  );
-
-  if (raw.includes("vape") || raw.includes("cartridge") || raw.includes("pod") || raw.includes("disposable")) return "Vape";
-  if (raw.includes("flower")) return "Flower";
-  if (raw.includes("edible") || raw.includes("gummies") || raw.includes("mint")) return "Edibles";
-  if (raw.includes("drink")) return "Drinks";
-  if (raw.includes("concentrate") || raw.includes("badder") || raw.includes("rosin") || raw.includes("resin") || raw.includes("diamonds")) return "Concentrates";
-  if (raw.includes("pre roll") || raw.includes("joint") || raw.includes("blunt")) return "Pre-Rolls";
-  if (raw.includes("tincture") || raw.includes("capsule")) return "Tinctures";
-  if (raw.includes("topical") || raw.includes("patch") || raw.includes("wellness")) return "Topicals";
-  return "Other";
-}
-
-export async function POST(req: Request) {
+export async function POST(request: Request) {
   try {
-    const supabase = await createClient();
-    const body = await req.json();
-    const rows = body.rows ?? [];
+    const body = await request.json();
+    const rows = Array.isArray(body?.rows) ? body.rows : [];
 
-    const cleanedRows = rows
-      .map((row: Record<string, unknown>) => {
-        const brand_name = String(row.brand_name || row.Brand || "").trim();
-        const product_name = String(
-          row.product_name || row["Product Name"] || row.name || ""
-        ).trim();
-
-        return {
-          brand_name,
-          product_name,
-          category: parseCategory(row),
-          distro: assignDistro(brand_name),
-          current_price: parsePrice(row),
-          active: true,
-        };
-      })
-      .filter((row: { brand_name: string; product_name: string }) => row.brand_name && row.product_name);
-
-    if (!cleanedRows.length) {
-      return NextResponse.json({ success: false, error: "No valid rows found" }, { status: 400 });
+    if (!rows.length) {
+      return NextResponse.json({ error: "No rows provided." }, { status: 400 });
     }
 
-    const { data, error } = await supabase
-      .from("products")
-      .upsert(cleanedRows, {
-        onConflict: "brand_name,product_name",
-      })
-      .select();
+    const cleaned = rows
+      .map(cleanRow)
+      .filter((row): row is ImportRow => Boolean(row));
 
-    if (error) throw error;
+    if (!cleaned.length) {
+      return NextResponse.json({ error: "No valid rows found." }, { status: 400 });
+    }
+
+    const dbChunks = cleaned; // already chunked from frontend
+
+    const { error } = await supabase
+      .from("products")
+      .upsert(dbChunks, {
+        onConflict: "brand_name,product_name",
+        ignoreDuplicates: false,
+      });
+
+    if (error) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
-      success: true,
-      count: cleanedRows.length,
-      inserted: data?.length ?? 0,
+      ok: true,
+      count: cleaned.length,
     });
-  } catch (e: any) {
+    } catch (error) {
+    console.error("IMPORT ROUTE ERROR:", error);
+
     return NextResponse.json(
-      { success: false, error: e.message },
+      {
+        error: error instanceof Error ? error.message : "Import failed"
+      },
       { status: 500 }
     );
   }
