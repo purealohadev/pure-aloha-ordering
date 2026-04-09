@@ -50,7 +50,7 @@ export async function POST(request: Request) {
 
     const cleaned = rows
       .map(cleanRow)
-      .filter((row): row is ImportRow => Boolean(row));
+      .filter((row: ImportRow | null): row is ImportRow => Boolean(row));
 
     if (!cleaned.length) {
       return NextResponse.json({ error: "No valid rows found." }, { status: 400 });
