@@ -203,6 +203,20 @@ for (const p of productsData ?? []) {
     productCoreNameMap.set(coreName, p.id);
   }
 }
+const productContainsMap = new Map<string, string>();
+
+for (const p of productsData ?? []) {
+  const coreName = extractCoreProductName(p.product_name);
+  const looseName = normalizeLooseName(p.product_name);
+
+  if (coreName && !productContainsMap.has(coreName)) {
+    productContainsMap.set(coreName, p.id);
+  }
+
+  if (looseName && !productContainsMap.has(looseName)) {
+    productContainsMap.set(looseName, p.id);
+  }
+}
 
     const inventoryMap = new Map<
       string,
@@ -231,7 +245,20 @@ if (!product_id) {
   const coreName = extractCoreProductName(row.name);
   product_id = productCoreNameMap.get(coreName);
 }
+if (!product_id) {
+  const rowLooseName = normalizeLooseName(row.name);
 
+  for (const [candidateName, candidateId] of productContainsMap.entries()) {
+    if (
+      candidateName &&
+      rowLooseName &&
+      (rowLooseName.includes(candidateName) || candidateName.includes(rowLooseName))
+    ) {
+      product_id = candidateId;
+      break;
+    }
+  }
+}
 if (!product_id) {
   console.log("UNMATCHED INVENTORY ROW:", {
     brand: row.brand,
