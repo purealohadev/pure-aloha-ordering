@@ -10,123 +10,279 @@ type ImportRow = {
   active: boolean;
 };
 
+type RawRow = {
+  sku?: unknown;
+  name?: unknown;
+  brand?: unknown;
+  category?: unknown;
+  vendor?: unknown;
+  price?: unknown;
+  is_active?: unknown;
+  inventory?: unknown;
+  reorder_point?: unknown;
+};
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-function cleanRow(row: any): ImportRow | null {
+function cleanRow(row: RawRow): ImportRow | null {
   const sku = String(row.sku ?? "").trim();
   const name = String(row.name ?? "").trim();
 
   if (!sku || !name) return null;
 
   return {
-  brand_name: row.brand?.trim() || null,
-  product_name: row.name,
-  category: row.category?.trim() || null,
-  distro: row.vendor?.trim() || null,
-  current_price: typeof row.price === "number" ? row.price : 0,
-  active: row.is_active !== false,
-};
+    brand_name: String(row.brand ?? "").trim() || null,
+    product_name: name,
+    category: String(row.category ?? "").trim() || null,
+    distro: String(row.vendor ?? "").trim() || null,
+    current_price:
+      typeof row.price === "number"
+        ? row.price
+        : Number(String(row.price ?? "").trim()) || 0,
+    active: row.is_active !== false,
+  };
 }
 
-function chunkArray<T>(items: T[], size: number) {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
+function dedupeProducts(rows: ImportRow[]): ImportRow[] {
+  const map = new Map<string, ImportRow>();
+
+  for (const row of rows) {
+    const key = makeProductKey(row.brand_name, row.product_name);
+    map.set(key, row);
   }
-  return out;
+
+  return Array.from(map.values());
+}
+function normalizeBrand(value: unknown) {
+  const raw = String(value ?? "").trim().toLowerCase();
+
+  const map: Record<string, string> = {
+    "autumn": "autumn brands",
+    "autumn brands": "autumn brands",
+    "the pairist": "the pairist",
+    "pairist": "the pairist",
+    "seed junky": "seed junky",
+    "the tablet": "the tablet",
+  };
+
+  return map[raw] || raw;
+}
+function normalizeLooseName(value: unknown) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\|/g, " ")
+    .replace(/\((h|i|s)\)/gi, " ")
+    .replace(/\b(indoor|flower|preroll|pre-roll|ratio|tablets?)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
+function extractCoreProductName(value: unknown) {
+  const raw = String(value ?? "").trim();
+
+  if (!raw) return "";
+
+  const parts = raw
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  let candidate = raw;
+
+  if (parts.length >= 2) {
+    candidate = parts[1];
+  } else if (parts.length === 1) {
+    candidate = parts[0];
+  }
+
+  return candidate
+    .toLowerCase()
+    .replace(/\((h|i|s)\)/gi, " ")
+    .replace(/\b\d+(\.\d+)?g\b/gi, " ")
+    .replace(/\b(indoor|flower|preroll|pre-roll|ratio|tablets?)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function makeProductKey(brand: unknown, name: unknown) {
+  const cleanBrand = normalizeBrand(brand);
+  const cleanName = String(name ?? "").trim().toLowerCase();
+
+  return `${cleanBrand}__${cleanName}`;
+}
 export async function POST(request: Request) {
   try {
+    console.log("IMPORT ROUTE HIT");
+
     const body = await request.json();
-    const rows = Array.isArray(body?.rows) ? body.rows : [];
+    const rows: RawRow[] = Array.isArray(body?.rows) ? body.rows : [];
+
+    console.log("RAW ROW COUNT:", rows.length);
 
     if (!rows.length) {
       return NextResponse.json({ error: "No rows provided." }, { status: 400 });
     }
 
     const cleaned = rows
-  .map(cleanRow)
-  .filter((row: ImportRow | null): row is ImportRow => Boolean(row));
+      .map(cleanRow)
+      .filter((row): row is ImportRow => Boolean(row));
+
+    console.log("CLEANED ROW COUNT:", cleaned.length);
 
     if (!cleaned.length) {
       return NextResponse.json({ error: "No valid rows found." }, { status: 400 });
     }
 
-    const dbChunks = cleaned; // already chunked from frontend
+    const dedupedProducts = dedupeProducts(cleaned);
 
-    const { error } = await supabase
+    console.log("DEDUPED PRODUCT COUNT:", dedupedProducts.length);
+
+    const { error: productError } = await supabase
       .from("products")
-      .upsert(dbChunks, {
+      .upsert(dedupedProducts, {
         onConflict: "brand_name,product_name",
         ignoreDuplicates: false,
       });
 
-    if (error) {
+    console.log("PRODUCT UPSERT FINISHED:", productError);
+
+    if (productError) {
       return NextResponse.json(
-        { error: error.message },
+        { error: `PRODUCT UPSERT ERROR: ${productError.message}` },
         { status: 500 }
       );
     }
+
     const { data: productsData, error: fetchError } = await supabase
-  .from("products")
-  .select("id, brand_name, product_name");
+      .from("products")
+      .select("id, brand_name, product_name");
 
-if (fetchError) {
-  return NextResponse.json(
-    { error: fetchError.message },
-    { status: 500 }
-  );
+    console.log("PRODUCT FETCH FINISHED:", fetchError);
+
+    if (fetchError) {
+      return NextResponse.json(
+        { error: `PRODUCT FETCH ERROR: ${fetchError.message}` },
+        { status: 500 }
+      );
+    }
+
+    const productMap = new Map<string, string>(
+      (productsData ?? []).map(
+        (p: { id: string; brand_name: string | null; product_name: string }) => [
+          makeProductKey(normalizeBrand(p.brand_name), p.product_name),
+          p.id,
+        ]
+      )
+    );
+    const productNameOnlyMap = new Map<string, string>();
+
+for (const p of productsData ?? []) {
+  const normalizedName = String(p.product_name ?? "").trim().toLowerCase();
+
+  if (!productNameOnlyMap.has(normalizedName)) {
+    productNameOnlyMap.set(normalizedName, p.id);
+  }
+}
+const productLooseNameMap = new Map<string, string>();
+
+for (const p of productsData ?? []) {
+  const looseName = normalizeLooseName(p.product_name);
+
+  if (!productLooseNameMap.has(looseName)) {
+    productLooseNameMap.set(looseName, p.id);
+  }
+}
+const productCoreNameMap = new Map<string, string>();
+
+for (const p of productsData ?? []) {
+  const coreName = extractCoreProductName(p.product_name);
+
+  if (coreName && !productCoreNameMap.has(coreName)) {
+    productCoreNameMap.set(coreName, p.id);
+  }
 }
 
-const productMap = new Map(
-  productsData.map((p: any) => [`${p.brand_name}__${p.product_name}`, p.id])
-);
+    const inventoryMap = new Map<
+      string,
+      {
+        product_id: string;
+        on_hand: number;
+        par_level: number;
+      }
+    >();
 
-const inventoryRows = rows
-  .map((row: any) => {
-    const brand = String(row.brand ?? "").trim();
-    const name = String(row.name ?? "").trim();
-    const key = `${brand}__${name}`;
-    const product_id = productMap.get(key);
+    for (const row of rows) {
+      const key = makeProductKey(normalizeBrand(row.brand), row.name);
+let product_id = productMap.get(key);
 
-    if (!product_id) return null;
+if (!product_id) {
+  const normalizedName = String(row.name ?? "").trim().toLowerCase();
+  product_id = productNameOnlyMap.get(normalizedName);
+}
 
-    return {
-      product_id,
-      on_hand: Number(row.inventory ?? 0),
-      par_level: Number(row.reorder_point ?? 0),
-    };
-  })
-  .filter((row: any) => Boolean(row));
+if (!product_id) {
+  const looseName = normalizeLooseName(row.name);
+  product_id = productLooseNameMap.get(looseName);
+}
 
-const { error: inventoryError } = await supabase
-  .from("inventory")
-  .upsert(inventoryRows, {
-    onConflict: "product_id",
-    ignoreDuplicates: false,
+if (!product_id) {
+  const coreName = extractCoreProductName(row.name);
+  product_id = productCoreNameMap.get(coreName);
+}
+
+if (!product_id) {
+  console.log("UNMATCHED INVENTORY ROW:", {
+    brand: row.brand,
+    name: row.name,
+    inventory: row.inventory,
+    reorder_point: row.reorder_point,
   });
-
-if (inventoryError) {
-  return NextResponse.json(
-    { error: inventoryError.message },
-    { status: 500 }
-  );
+  continue;
 }
+
+if (!product_id) continue;
+
+      inventoryMap.set(product_id, {
+        product_id,
+        on_hand: Number(row.inventory ?? 0),
+        par_level: Number(row.reorder_point ?? 0),
+      });
+    }
+
+    const inventoryRows = Array.from(inventoryMap.values());
+
+    console.log("INVENTORY ROW COUNT:", inventoryRows.length);
+
+    if (inventoryRows.length) {
+      const { error: inventoryError } = await supabase
+        .from("inventory")
+        .upsert(inventoryRows, {
+          onConflict: "product_id",
+          ignoreDuplicates: false,
+        });
+
+      console.log("INVENTORY UPSERT FINISHED:", inventoryError);
+
+      if (inventoryError) {
+        return NextResponse.json(
+          { error: `INVENTORY UPSERT ERROR: ${inventoryError.message}` },
+          { status: 500 }
+        );
+      }
+    }
 
     return NextResponse.json({
       ok: true,
-      count: cleaned.length,
+      count: dedupedProducts.length,
     });
-    } catch (error) {
+  } catch (error) {
     console.error("IMPORT ROUTE ERROR:", error);
 
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Import failed"
+        error: error instanceof Error ? error.message : "Import failed",
       },
       { status: 500 }
     );
