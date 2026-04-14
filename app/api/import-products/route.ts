@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 type ImportRow = {
-  brand_name: string | null;
+  sku: string;
+  brand_name: string;
   product_name: string;
   category: string | null;
   distro: string | null;
@@ -27,21 +28,22 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-function cleanRow(row: RawRow): ImportRow | null {
+function cleanRow(row: any): ImportRow | null {
   const sku = String(row.sku ?? "").trim();
   const name = String(row.name ?? "").trim();
 
   if (!sku || !name) return null;
 
   return {
-    brand_name: String(row.brand ?? "").trim() || null,
+    sku,
+   brand_name: String(row.brand ?? "").trim() || "Unknown",
     product_name: name,
     category: String(row.category ?? "").trim() || null,
     distro: String(row.vendor ?? "").trim() || null,
     current_price:
       typeof row.price === "number"
         ? row.price
-        : Number(String(row.price ?? "").trim()) || 0,
+        : Number(String(row.price ?? "").replace(/[$,]/g, "").trim()) || 0,
     active: row.is_active !== false,
   };
 }
@@ -136,38 +138,108 @@ export async function POST(request: Request) {
     }
 
     const dedupedProducts = dedupeProducts(cleaned);
+const skuDedupedMap = new Map<string, ImportRow>();
 
-    console.log("DEDUPED PRODUCT COUNT:", dedupedProducts.length);
+for (const row of dedupedProducts) {
+  const sku = String(row.sku ?? "").trim();
 
-    const { error: productError } = await supabase
-      .from("products")
-      .upsert(dedupedProducts, {
-        onConflict: "brand_name,product_name",
-        ignoreDuplicates: false,
-      });
+  if (sku) {
+    skuDedupedMap.set(sku, row);
+  }
+}
 
-    console.log("PRODUCT UPSERT FINISHED:", productError);
+const dedupedProductsBySku = Array.from(skuDedupedMap.values());
+console.log("DEDUPED PRODUCT COUNT:", dedupedProductsBySku.length);
 
-    if (productError) {
-      return NextResponse.json(
-        { error: `PRODUCT UPSERT ERROR: ${productError.message}` },
-        { status: 500 }
-      );
-    }
+const { data: productsData, error: fetchError } = await supabase
+  .from("products")
+  .select("id, sku, brand_name, product_name");
 
-    const { data: productsData, error: fetchError } = await supabase
-      .from("products")
-      .select("id, brand_name, product_name");
+if (fetchError) {
+  return NextResponse.json(
+    { error: `PRODUCT FETCH ERROR: ${fetchError.message}` },
+    { status: 500 }
+  );
+}
 
-    console.log("PRODUCT FETCH FINISHED:", fetchError);
+const existingSkuMap = new Map<
+  string,
+  { id: string; brand_name: string; product_name: string }
+>();
 
-    if (fetchError) {
-      return NextResponse.json(
-        { error: `PRODUCT FETCH ERROR: ${fetchError.message}` },
-        { status: 500 }
-      );
-    }
+for (const p of productsData ?? []) {
+  const sku = String((p as any).sku ?? "").trim();
+  const id = String((p as any).id ?? "").trim();
+  const brand_name = String((p as any).brand_name ?? "").trim();
+  const product_name = String((p as any).product_name ?? "").trim();
 
+  if (sku) {
+    existingSkuMap.set(sku, {
+      id,
+      brand_name,
+      product_name,
+    });
+  }
+}
+
+const existingSkuRows = dedupedProductsBySku
+  .filter((row) => existingSkuMap.has(String(row.sku ?? "").trim()))
+  .map((row) => {
+    const existing = existingSkuMap.get(String(row.sku ?? "").trim())!;
+
+    return {
+      id: existing.id,
+      sku: row.sku,
+      brand_name: existing.brand_name,
+      product_name: existing.product_name,
+      category: row.category,
+      distro: row.distro,
+      current_price: row.current_price,
+      active: row.active,
+    };
+  });
+
+const newSkuRows = dedupedProductsBySku.filter(
+  (row) => !existingSkuMap.has(String(row.sku ?? "").trim())
+);
+
+if (existingSkuRows.length) {
+  const { error: existingSkuError } = await supabase
+    .from("products")
+    .upsert(existingSkuRows, {
+      onConflict: "id",
+      ignoreDuplicates: false,
+    });
+
+  console.log("EXISTING SKU UPSERT FINISHED:", existingSkuError);
+
+  if (existingSkuError) {
+    return NextResponse.json(
+      { error: `PRODUCT UPSERT ERROR: ${existingSkuError.message}` },
+      { status: 500 }
+    );
+  }
+}
+
+if (newSkuRows.length) {
+  const { error: newSkuError } = await supabase
+    .from("products")
+    .upsert(newSkuRows, {
+      onConflict: "brand_name,product_name",
+      ignoreDuplicates: false,
+    });
+
+  console.log("NEW SKU UPSERT FINISHED:", newSkuError);
+
+  if (newSkuError) {
+    return NextResponse.json(
+      { error: `PRODUCT UPSERT ERROR: ${newSkuError.message}` },
+      { status: 500 }
+    );
+  }
+}
+
+console.log("PRODUCT UPSERT FINISHED:", null);
     const productMap = new Map<string, string>(
       (productsData ?? []).map(
         (p: { id: string; brand_name: string | null; product_name: string }) => [
@@ -183,6 +255,14 @@ for (const p of productsData ?? []) {
 
   if (!productNameOnlyMap.has(normalizedName)) {
     productNameOnlyMap.set(normalizedName, p.id);
+  }
+}
+const productSkuMap = new Map<string, string>();
+
+for (const p of productsData ?? []) {
+  const sku = String((p as any).sku ?? "").trim();
+  if (sku && !productSkuMap.has(sku)) {
+    productSkuMap.set(sku, (p as any).id);
   }
 }
 const productLooseNameMap = new Map<string, string>();
@@ -228,8 +308,13 @@ for (const p of productsData ?? []) {
     >();
 
     for (const row of rows) {
-      const key = makeProductKey(normalizeBrand(row.brand), row.name);
-let product_id = productMap.get(key);
+      const rowSku = String(row.sku ?? "").trim();
+let product_id = productSkuMap.get(rowSku);
+
+if (!product_id) {
+  const key = makeProductKey(normalizeBrand(row.brand), row.name);
+  product_id = productMap.get(key);
+}
 
 if (!product_id) {
   const normalizedName = String(row.name ?? "").trim().toLowerCase();
