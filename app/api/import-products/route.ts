@@ -182,63 +182,6 @@ for (const p of productsData ?? []) {
   }
 }
 
-const existingSkuRows = dedupedProductsBySku
-  .filter((row) => existingSkuMap.has(String(row.sku ?? "").trim()))
-  .map((row) => {
-    const existing = existingSkuMap.get(String(row.sku ?? "").trim())!;
-
-    return {
-      id: existing.id,
-      sku: row.sku,
-      brand_name: existing.brand_name,
-      product_name: existing.product_name,
-      category: row.category,
-      distro: row.distro,
-      current_price: row.current_price,
-      active: row.active,
-    };
-  });
-
-const newSkuRows = dedupedProductsBySku.filter(
-  (row) => !existingSkuMap.has(String(row.sku ?? "").trim())
-);
-
-if (existingSkuRows.length) {
-  const { error: existingSkuError } = await supabase
-    .from("products")
-    .upsert(existingSkuRows, {
-      onConflict: "id",
-      ignoreDuplicates: false,
-    });
-
-  console.log("EXISTING SKU UPSERT FINISHED:", existingSkuError);
-
-  if (existingSkuError) {
-    return NextResponse.json(
-      { error: `PRODUCT UPSERT ERROR: ${existingSkuError.message}` },
-      { status: 500 }
-    );
-  }
-}
-
-if (newSkuRows.length) {
-  const { error: newSkuError } = await supabase
-    .from("products")
-    .upsert(newSkuRows, {
-      onConflict: "brand_name,product_name",
-      ignoreDuplicates: false,
-    });
-
-  console.log("NEW SKU UPSERT FINISHED:", newSkuError);
-
-  if (newSkuError) {
-    return NextResponse.json(
-      { error: `PRODUCT UPSERT ERROR: ${newSkuError.message}` },
-      { status: 500 }
-    );
-  }
-}
-
 console.log("PRODUCT UPSERT FINISHED:", null);
     const productMap = new Map<string, string>(
       (productsData ?? []).map(
