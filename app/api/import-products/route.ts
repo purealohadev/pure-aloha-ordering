@@ -120,6 +120,7 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const rows: RawRow[] = Array.isArray(body?.rows) ? body.rows : [];
+    const unmatchedRows: any[] = [];
 
     console.log("RAW ROW COUNT:", rows.length);
 
@@ -288,12 +289,17 @@ if (!product_id) {
   }
 }
 if (!product_id) {
-  console.log("UNMATCHED INVENTORY ROW:", {
+  const unmatched = {
     brand: row.brand,
     name: row.name,
     inventory: row.inventory,
     reorder_point: row.reorder_point,
-  });
+  };
+
+  unmatchedRows.push(unmatched);
+
+  console.log("UNMATCHED INVENTORY ROW:", unmatched);
+
   continue;
 }
 
@@ -329,9 +335,11 @@ if (!product_id) continue;
     }
 
     return NextResponse.json({
-      ok: true,
-      count: dedupedProducts.length,
-    });
+  ok: true,
+  count: dedupedProducts.length,
+  unmatched_count: unmatchedRows.length,
+  unmatched_sample: unmatchedRows.slice(0, 20),
+});
   } catch (error) {
     console.error("IMPORT ROUTE ERROR:", error);
 

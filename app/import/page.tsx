@@ -59,6 +59,8 @@ export default function ImportPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [progress, setProgress] = useState("");
   const [result, setResult] = useState<string>("");
+  const [unmatchedCount, setUnmatchedCount] = useState(0);
+  const [unmatchedSample, setUnmatchedSample] = useState<any[]>([]);
 
   const canImport = useMemo(() => rows.length > 0 && !isImporting, [rows, isImporting]);
 
@@ -159,6 +161,8 @@ const normalized: ImportRow[] = dataRows
         });
 
         const data = await res.json();
+        setUnmatchedCount(data.unmatched_count || 0);
+        setUnmatchedSample(data.unmatched_sample || []);
 
         if (!res.ok) {
           throw new Error(data?.error || `Batch ${i + 1} failed`);
@@ -200,6 +204,19 @@ const normalized: ImportRow[] = dataRows
         {progress && <div>{progress}</div>}
         {previewCount > 0 && <div>Rows ready: {previewCount}</div>}
         {result && <div>{result}</div>}
+        {unmatchedCount > 0 && (
+  <div style={{ marginTop: 20 }}>
+    <h3>⚠️ Unmatched Items: {unmatchedCount}</h3>
+
+    <ul>
+      {unmatchedSample.map((item, i) => (
+        <li key={i}>
+          {item.brand || "Unknown"} — {item.name}
+        </li>
+      ))}
+    </ul>
+  </div>
+)}
       </div>
     </div>
   );
