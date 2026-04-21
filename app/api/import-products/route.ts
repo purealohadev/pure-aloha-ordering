@@ -61,16 +61,38 @@ function dedupeProducts(rows: ImportRow[]): ImportRow[] {
 function normalizeBrand(value: unknown) {
   const raw = String(value ?? "").trim().toLowerCase();
 
-  const map: Record<string, string> = {
-    "autumn": "autumn brands",
-    "autumn brands": "autumn brands",
-    "the pairist": "the pairist",
-    "pairist": "the pairist",
-    "seed junky": "seed junky",
-    "the tablet": "the tablet",
-  };
+  const aliases: Record<string, string> = {
+  "kiva": "kiva",
+  "kiva lost farm": "kiva",
+  "lost farm": "kiva",
 
-  return map[raw] || raw;
+  "rove": "rove",
+  "rove ice packs": "rove",
+
+  "raw garden": "raw garden",
+  "raw": "raw garden",
+
+  "stiiizy": "stiiizy",
+  "stiiizy promo": "stiiizy",
+
+  "uncle arnies": "uncle arnie's",
+  "uncle arnie's": "uncle arnie's",
+
+  "vet cbd": "vetcbd",
+  "vetcbd": "vetcbd",
+
+  "kingroll": "kingroll",
+  "kingroll juniors": "kingroll",
+  "kingroll junior": "kingroll",
+
+  "the pairist": "the pairist",
+  "pairist": "the pairist",
+
+  "autumn": "autumn brands",
+  "autumn brands": "autumn brands",
+};
+
+return aliases[raw] || raw;
 }
 function normalizeLooseName(value: unknown) {
   return String(value ?? "")
