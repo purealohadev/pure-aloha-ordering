@@ -61,6 +61,38 @@ export default function ImportPage() {
   const [result, setResult] = useState<string>("");
   const [unmatchedCount, setUnmatchedCount] = useState(0);
   const [unmatchedSample, setUnmatchedSample] = useState<any[]>([]);
+  function dedupeUnmatched(items: any[]) {
+  const seen = new Set();
+
+  return items.filter((item) => {
+    const key = `${(item.brand || "").toLowerCase()}__${(item.name || "").toLowerCase()}`;
+
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    return true;
+  });
+}
+function isJunkItem(name: string) {
+  const n = (name || "").toLowerCase();
+
+  return (
+    n.includes("battery") ||
+    n.includes("batteries") ||
+    n.includes("charger") ||
+    n.includes("lighter") ||
+    n.includes("torch") ||
+    n.includes("adapter") ||
+    n.includes("cable") ||
+    n.includes("tool") ||
+    n.includes("device") ||
+    n.includes("merch") ||
+    n.includes("shirt") ||
+    n.includes("hat") ||
+    n.includes("hoodie") ||
+    n.includes("tray")
+  );
+}
 
   const canImport = useMemo(() => rows.length > 0 && !isImporting, [rows, isImporting]);
 
@@ -162,7 +194,11 @@ const normalized: ImportRow[] = dataRows
 
         const data = await res.json();
         setUnmatchedCount(data.unmatched_count || 0);
-        setUnmatchedSample(data.unmatched_sample || []);
+        setUnmatchedSample(
+  dedupeUnmatched(data.unmatched_sample || []).filter(
+    (item) => !isJunkItem(item.name)
+  )
+);
 
         if (!res.ok) {
           throw new Error(data?.error || `Batch ${i + 1} failed`);
@@ -179,6 +215,95 @@ const normalized: ImportRow[] = dataRows
       setIsImporting(false);
     }
   }
+  function downloadUnmatchedCSV() {
+  if (!unmatchedSample.length) return;
+
+  const headers = [
+    "sku",
+    "brand",
+    "name",
+    "category",
+    "vendor",
+    "price",
+    "is_active",
+    "inventory",
+    "reorder_point",
+  ];
+
+  function generateSKU(brand: string, name: string) {
+    return (
+      (brand || "GEN")
+        .replace(/\s+/g, "")
+        .toUpperCase()
+        .slice(0, 6) +
+      "-" +
+      (name || "ITEM")
+        .replace(/\s+/g, "")
+        .toUpperCase()
+        .slice(0, 10)
+    );
+  }
+
+  function guessCategory(name: string) {
+    const n = (name || "").toLowerCase();
+
+    if (n.includes("flower") || n.includes("3.5") || n.includes("14g")) {
+      return "Flower";
+    }
+    if (n.includes("preroll") || n.includes("pre roll")) {
+      return "Preroll";
+    }
+    if (n.includes("vape") || n.includes("cartridge")) {
+      return "Vape";
+    }
+    if (n.includes("gummy") || n.includes("chocolate")) {
+      return "Edible";
+    }
+    if (n.includes("drink") || n.includes("tea")) {
+      return "Beverage";
+    }
+
+    return "Misc";
+  }
+
+  const rows = dedupeUnmatched(unmatchedSample)
+  .filter((item) => !isJunkItem(item.name))
+  .map((item) => {
+    const brand = item.brand || "Unknown";
+    const name = item.name || "Unnamed";
+
+    return [
+      generateSKU(brand, name),
+      brand,
+      name,
+      guessCategory(name),
+      "Unknown",
+      0,
+      true,
+      item.inventory || 0,
+      item.reorder_point || 0,
+    ];
+  });
+
+  const csvContent = [headers, ...rows]
+    .map((row) =>
+      row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")
+    )
+    .join("\n");
+
+  const blob = new Blob([csvContent], {
+    type: "text/csv;charset=utf-8;",
+  });
+
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", "unmatched_products_ready.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
 
   return (
     <div className="space-y-6">
@@ -207,7 +332,9 @@ const normalized: ImportRow[] = dataRows
         {unmatchedCount > 0 && (
   <div style={{ marginTop: 20 }}>
     <h3>⚠️ Unmatched Items: {unmatchedCount}</h3>
-
+<button onClick={downloadUnmatchedCSV}>
+  Download Unmatched CSV
+</button>
     <ul>
       {unmatchedSample.map((item, i) => (
         <li key={i}>
