@@ -50,6 +50,39 @@ export default async function DashboardPage() {
     >
       <div
         style={{
+          marginBottom: 24,
+          border: "1px solid #dbe4ee",
+          borderRadius: 16,
+          padding: 18,
+          background:
+            "linear-gradient(135deg, rgba(239,246,255,0.95) 0%, rgba(255,255,255,0.98) 60%)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: 16,
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Import Tools</div>
+            <p style={{ marginTop: 6, color: "#475569" }}>
+              Jump directly into product or inventory imports from the dashboard.
+            </p>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <ActionLink href="/import" label="Open Product Import" />
+            <ActionLink href="/inventory-import" label="Open Inventory Import" tone="warm" />
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
           display: "grid",
           gap: 16,
           gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
@@ -178,6 +211,37 @@ function QuickLinkCard({
     >
       <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>{title}</div>
       <div style={{ color: "#64748b", fontSize: 14 }}>{description}</div>
+    </Link>
+  );
+}
+
+function ActionLink({
+  href,
+  label,
+  tone = "default",
+}: {
+  href: string;
+  label: string;
+  tone?: "default" | "warm";
+}) {
+  return (
+    <Link
+      href={href}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: 42,
+        padding: "10px 16px",
+        borderRadius: 999,
+        textDecoration: "none",
+        fontWeight: 600,
+        border: tone === "warm" ? "1px solid #f5d0a9" : "1px solid #cbd5e1",
+        background: tone === "warm" ? "#fff7ed" : "#ffffff",
+        color: "#0f172a",
+      }}
+    >
+      {label}
     </Link>
   );
 }
