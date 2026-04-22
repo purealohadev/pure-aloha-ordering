@@ -97,9 +97,14 @@ export default async function DashboardPage() {
           />
         ) : null}
         <QuickLinkCard
-          title="Import"
-          description="Load the latest order guide and inventory data."
+          title="Product Import"
+          description="Load product and menu data without touching inventory counts."
           href="/import"
+        />
+        <QuickLinkCard
+          title="Inventory Import"
+          description="Update inventory counts and review unmatched inventory rows."
+          href="/inventory-import"
         />
       </div>
     </PageShell>
@@ -176,4 +181,3 @@ function QuickLinkCard({
     </Link>
   );
 }
-

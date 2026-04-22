@@ -58,7 +58,8 @@ export default function NavBar() {
         {role === "manager" || role === "admin" ? (
           <Link href="/approvals">Approvals</Link>
         ) : null}
-        <Link href="/import">Import</Link>
+        <Link href="/import">Product Import</Link>
+        <Link href="/inventory-import">Inventory Import</Link>
       </div>
 
       <button
@@ -76,4 +77,3 @@ export default function NavBar() {
     </div>
   );
 }
-

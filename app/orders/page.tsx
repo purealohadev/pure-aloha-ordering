@@ -1,5 +1,5 @@
 "use client";
-
+import React from "react";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -107,6 +107,7 @@ export default function OrdersPage() {
   const [showOnlyReorders, setShowOnlyReorders] = useState(true);
   const [search, setSearch] = useState("");
   const [distroFilter, setDistroFilter] = useState("All");
+  const [isMobile, setIsMobile] = useState(true);
 
   useEffect(() => {
     async function loadData() {
@@ -181,12 +182,28 @@ export default function OrdersPage() {
         };
       });
 
-      setRows(mapped);
+      const filtered = (mapped || []).filter((p: any) => {
+  const onHand = p.on_hand ?? 0;
+  const par = p.par_level ?? 0;
+  return onHand <= par;
+});
+
+setRows(filtered);
       setLoading(false);
     }
 
     loadData();
   }, [supabase]);
+  useEffect(() => {
+  function checkScreen() {
+    setIsMobile(window.innerWidth < 900);
+  }
+
+  checkScreen();
+  window.addEventListener("resize", checkScreen);
+
+  return () => window.removeEventListener("resize", checkScreen);
+}, []);
 
   function updateSuggested(id: string, value: string) {
     const qty = Math.max(0, Number(value) || 0);
@@ -275,54 +292,70 @@ export default function OrdersPage() {
   }, [rows, showOnlyReorders, search, distroFilter]);
 
   const totalOrderValue = filteredRows.reduce((sum, row) => sum + row.lineTotal, 0);
+const groupedRows = filteredRows.reduce((groups, row) => {
+  const key = row.distro || "Other";
 
-  function exportAllOpenPO() {
-    const exportRows = filteredRows
-      .filter((r) => r.suggested > 0)
-      .map((r) => ({
-        distro: r.distro,
-        brand_name: r.brand_name,
-        product_name: r.product_name,
-        category: r.category,
-        on_hand: r.onHand,
-        par_level: r.par,
-        order_qty: r.suggested,
-        unit_price: r.current_price,
-        line_total: r.lineTotal.toFixed(2),
-      }));
-
-    if (!exportRows.length) {
-      setMessage("No reorder lines to export.");
-      return;
-    }
-
-    exportCsv("all-open-purchase-orders.csv", exportRows);
-    setMessage("Exported all open purchase order lines.");
+  if (!groups[key]) {
+    groups[key] = [];
   }
 
-  function exportDistroPO(distro: string) {
-    const exportRows = rows
-      .filter((r) => r.distro === distro && r.suggested > 0)
-      .map((r) => ({
-        brand_name: r.brand_name,
-        product_name: r.product_name,
-        category: r.category,
-        on_hand: r.onHand,
-        par_level: r.par,
-        order_qty: r.suggested,
-        unit_price: r.current_price,
-        line_total: r.lineTotal.toFixed(2),
-      }));
+  groups[key].push(row);
+  return groups;
+}, {} as Record<string, OrderRow[]>);
+const groupedTotals = Object.fromEntries(
+  Object.entries(groupedRows).map(([distro, distroRows]) => [
+    distro,
+    distroRows.reduce((sum, row) => sum + row.lineTotal, 0),
+  ])
+);
+ function exportAllOpenPO() {
+  const exportRows = filteredRows
+    .filter((r) => r.suggested > 0)
+    .map((r) => ({
+      distro: r.distro,
+      brand_name: r.brand_name,
+      product_name: r.product_name,
+      category: r.category,
+      on_hand: r.onHand,
+      par_level: r.par,
+      order_qty: r.suggested,
+      unit_price: r.current_price,
+      line_total: r.lineTotal.toFixed(2),
+    }));
 
-    if (!exportRows.length) {
-      setMessage(`No reorder lines for ${distro}.`);
-      return;
-    }
-
-    const safeName = distro.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    exportCsv(`${safeName}-purchase-order.csv`, exportRows);
-    setMessage(`Exported ${distro} purchase order.`);
+  if (!exportRows.length) {
+    setMessage("No reorder lines to export.");
+    return;
   }
+
+  exportCsv("all-open-purchase-orders.csv", exportRows);
+  setMessage("Exported all open purchase order lines.");
+}
+
+function exportDistroPO(distro: string) {
+  const exportRows = filteredRows
+    .filter((r) => r.distro === distro && r.suggested > 0)
+    .map((r) => ({
+      distro: r.distro,
+      brand_name: r.brand_name,
+      product_name: r.product_name,
+      category: r.category,
+      on_hand: r.onHand,
+      par_level: r.par,
+      order_qty: r.suggested,
+      unit_price: r.current_price,
+      line_total: r.lineTotal.toFixed(2),
+    }));
+
+  if (!exportRows.length) {
+    setMessage(`No reorder lines to export for ${distro}.`);
+    return;
+  }
+
+  const safeName = distro.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  exportCsv(`${safeName}-purchase-order.csv`, exportRows);
+  setMessage(`Exported purchase order for ${distro}.`);
+}
 
   return (
     <PageShell
@@ -432,20 +465,24 @@ export default function OrdersPage() {
       {loading ? (
         <p>Loading...</p>
       ) : (
-        <div
-          style={{
-            marginTop: 8,
-            overflowX: "auto",
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-          }}
-        >
+       <div
+  style={{
+    marginTop: 8,
+    overflowX: "auto",
+    WebkitOverflowScrolling: "touch",
+    border: "1px solid #e2e8f0",
+    borderRadius: 12,
+    background: "#fff",
+  }}
+>{!isMobile && (
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
             <thead style={{ background: "#f8fafc" }}>
               <tr>
                 <th style={th}>Brand</th>
                 <th style={th}>Product</th>
-                <th style={th}>Category</th>
+                <th style={{ ...th, display: "none" }}>
+  Category
+</th>
                 <th style={th}>Distro</th>
                 <th style={th}>On Hand</th>
                 <th style={th}>Par</th>
@@ -456,39 +493,82 @@ export default function OrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((row) => (
-                <tr key={row.id}>
-                  <td style={td}>{row.brand_name}</td>
-                  <td style={td}>{row.product_name}</td>
-                  <td style={td}>{row.category}</td>
-                  <td style={td}>{row.distro}</td>
-                  <td style={td}>{row.onHand}</td>
-                  <td style={td}>{row.par}</td>
-                  <td style={td}>
-                    <input
-                      type="number"
-                      min="0"
-                      value={row.suggested}
-                      onChange={(e) => updateSuggested(row.id, e.target.value)}
-                      style={{
-                        width: 72,
-                        padding: 6,
-                        borderRadius: 8,
-                        border: "1px solid #cbd5e1",
-                      }}
-                    />
-                  </td>
-                  <td style={td}>
-                    <span style={getStatusStyle(row.status)}>
-                      {row.status}
-                    </span>
-                  </td>
-                  <td style={td}>${Number(row.current_price ?? 0).toFixed(2)}</td>
-                  <td style={td}>${row.lineTotal.toFixed(2)}</td>
-                </tr>
-              ))}
+  {Object.entries(groupedRows).map(([distro, distroRows]) => (
+    <React.Fragment key={distro}>
+      <tr key={`group-${distro}`}>
+  <td
+    colSpan={10}
+    style={{
+      ...td,
+      fontWeight: 700,
+      background: "#f8fafc",
+      borderTop: "2px solid #cbd5e1",
+    }}
+  >
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+      }}
+    >
+      <span>
+        {distro} — Total: ${Number(groupedTotals[distro] ?? 0).toFixed(2)}
+      </span>
+
+      <button
+        onClick={() => exportDistroPO(distro)}
+        style={{
+          padding: "6px 10px",
+          borderRadius: 8,
+          border: "1px solid #cbd5e1",
+          background: "#fff",
+          cursor: "pointer",
+          fontWeight: 600,
+        }}
+      >
+        Export {distro}
+      </button>
+    </div>
+  </td>
+</tr>
+
+      {distroRows.map((row) => (
+        <tr key={row.id}>
+          <td style={td}>{row.brand_name}</td>
+          <td style={td}>{row.product_name}</td>
+          <td style={{ ...td, display: "none" }}>{row.category}</td>
+          <td style={td}>{row.distro}</td>
+          <td style={td}>{row.onHand}</td>
+          <td style={td}>{row.par}</td>
+          <td style={td}>
+            <input
+              type="number"
+              min="0"
+              value={row.suggested}
+              onChange={(e) => updateSuggested(row.id, e.target.value)}
+              style={{
+                width: 72,
+                padding: 6,
+                borderRadius: 8,
+                border: "1px solid #cbd5e1",
+              }}
+            />
+          </td>
+          <td style={td}>
+            <span style={getStatusStyle(row.status)}>
+              {row.status}
+            </span>
+          </td>
+          <td style={td}>${Number(row.current_price ?? 0).toFixed(2)}</td>
+          <td style={td}>${row.lineTotal.toFixed(2)}</td>
+        </tr>
+      ))}
+    </React.Fragment>
+  ))}
             </tbody>
           </table>
+          )}
         </div>
       )}
     </PageShell>
