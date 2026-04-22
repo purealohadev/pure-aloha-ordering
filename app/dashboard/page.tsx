@@ -1,6 +1,20 @@
-import { createClient } from "@/lib/supabase/server";
-import PageShell from "@/components/PageShell";
 import Link from "next/link";
+import {
+  ArrowRight,
+  Boxes,
+  ClipboardCheck,
+  FileSpreadsheet,
+  PackageSearch,
+  RefreshCcw,
+  Sparkles,
+  TriangleAlert,
+  Warehouse,
+} from "lucide-react";
+import NavBar from "@/components/NavBar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { createClient } from "@/lib/supabase/server";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -11,10 +25,14 @@ export default async function DashboardPage() {
 
   if (!user) {
     return (
-      <main style={{ padding: 24 }}>
-        <h1>Dashboard</h1>
-        <p>Not logged in.</p>
-        <Link href="/login">Go to login</Link>
+      <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.05),_transparent_40%),linear-gradient(to_bottom,_rgba(248,250,252,0.95),_rgba(255,255,255,1))] px-6 py-10">
+        <div className="mx-auto max-w-xl rounded-3xl border border-border bg-card p-8 shadow-sm">
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">Dashboard</h1>
+          <p className="mt-3 text-sm text-muted-foreground">You need to sign in to access the ordering home screen.</p>
+          <Button asChild className="mt-6">
+            <Link href="/login">Go to login</Link>
+          </Button>
+        </div>
       </main>
     );
   }
@@ -43,205 +61,369 @@ export default async function DashboardPage() {
     .select("*", { count: "exact", head: true })
     .eq("status", "approved");
 
-  return (
-    <PageShell
-      title="Dashboard"
-      subtitle="Overview of products, purchase orders, and approvals."
-    >
-      <div
-        style={{
-          marginBottom: 24,
-          border: "1px solid #dbe4ee",
-          borderRadius: 16,
-          padding: 18,
-          background:
-            "linear-gradient(135deg, rgba(239,246,255,0.95) 0%, rgba(255,255,255,0.98) 60%)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: 16,
-            flexWrap: "wrap",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Import Tools</div>
-            <p style={{ marginTop: 6, color: "#475569" }}>
-              Jump directly into product or inventory imports from the dashboard.
-            </p>
-          </div>
+  const role = profile?.role ?? "";
+  const canAccessApprovals = role === "manager" || role === "admin";
+  const displayName = profile?.full_name ?? profile?.email ?? user.email ?? "Team Member";
 
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <ActionLink href="/import" label="Open Product Import" />
-            <ActionLink href="/inventory-import" label="Open Inventory Import" tone="warm" />
-          </div>
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.08),_transparent_34%),radial-gradient(circle_at_right,_rgba(180,83,9,0.08),_transparent_28%),linear-gradient(to_bottom,_rgba(248,250,252,0.98),_rgba(255,255,255,1))]">
+      <NavBar />
+
+      <main className="px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-7xl flex-col gap-8">
+          <section className="overflow-hidden rounded-[2rem] border border-border/80 bg-card/90 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.45)]">
+            <div className="grid gap-8 px-6 py-8 sm:px-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] lg:px-10 lg:py-10">
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge className="rounded-full bg-foreground px-3 py-1 text-[11px] tracking-[0.18em] text-background uppercase">
+                    Main Home
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
+                    {role ? `Role: ${role}` : "Signed in"}
+                  </Badge>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-muted-foreground">Welcome back, {displayName}</p>
+                    <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
+                      Ordering Home Screen
+                    </h1>
+                  </div>
+                  <p className="max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
+                    Start imports, monitor ordering activity, and keep the product-to-inventory workflow in the right order from one place.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-3">
+                  <Button asChild size="lg" className="rounded-full px-5">
+                    <Link href="/import">
+                      Open Product Import
+                      <ArrowRight className="size-4" />
+                    </Link>
+                  </Button>
+                  <Button asChild size="lg" variant="outline" className="rounded-full px-5">
+                    <Link href="/inventory-import">
+                      Open Inventory Import
+                      <RefreshCcw className="size-4" />
+                    </Link>
+                  </Button>
+                  <Button asChild size="lg" variant="ghost" className="rounded-full px-5">
+                    <Link href="/orders">
+                      Review Orders
+                      <ClipboardCheck className="size-4" />
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
+                <HeroMetric
+                  label="Products loaded"
+                  value={formatNumber(productCount)}
+                  detail="Current catalog rows available before the next import."
+                />
+                <HeroMetric
+                  label="Orders in system"
+                  value={formatNumber(poCount)}
+                  detail="Draft, submitted, and approved purchase orders."
+                />
+                <HeroMetric
+                  label={canAccessApprovals ? "Needs approval" : "Approved orders"}
+                  value={formatNumber(canAccessApprovals ? submittedCount : approvedCount)}
+                  detail={
+                    canAccessApprovals
+                      ? "Submitted orders waiting for manager review."
+                      : "Approved orders available in history."
+                  }
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="grid gap-4 lg:grid-cols-3">
+            <ActionCard
+              href="/import"
+              icon={FileSpreadsheet}
+              eyebrow="Start here"
+              title="Product Import"
+              description="Refresh product, menu, and SKU data before any inventory updates."
+              summary={`${formatNumber(productCount)} products currently loaded`}
+              cta="Open Product Import"
+            />
+            <ActionCard
+              href="/inventory-import"
+              icon={Warehouse}
+              eyebrow="Step two"
+              title="Inventory Import"
+              description="Update on-hand quantities after the product catalog is current."
+              summary="Includes unmatched row review and follow-up tools"
+              cta="Open Inventory Import"
+            />
+            <ActionCard
+              href="/orders"
+              icon={canAccessApprovals ? ClipboardCheck : Boxes}
+              eyebrow={canAccessApprovals ? "Orders and approvals" : "Ordering"}
+              title={canAccessApprovals ? "Orders & Approvals" : "Orders Workspace"}
+              description={
+                canAccessApprovals
+                  ? "Build orders, then switch into approvals when submitted POs need review."
+                  : "Create draft orders, submit them, and review history from the ordering workspace."
+              }
+              summary={
+                canAccessApprovals
+                  ? `${formatNumber(submittedCount)} submitted orders are waiting for approval`
+                  : `${formatNumber(poCount)} purchase orders are available in the system`
+              }
+              cta="Open Orders"
+              secondaryHref={canAccessApprovals ? "/approvals" : undefined}
+              secondaryLabel={canAccessApprovals ? "Go to Approvals" : undefined}
+            />
+          </section>
+
+          <section className="grid gap-4 md:grid-cols-3">
+            <SummaryCard
+              icon={FileSpreadsheet}
+              title="Product Import"
+              value={formatNumber(productCount)}
+              detail="Refresh products first whenever vendor files change so inventory rows have a clean catalog to match against."
+            />
+            <SummaryCard
+              icon={RefreshCcw}
+              title="Inventory Import"
+              value="Step 2"
+              detail="Run inventory after products to update counts and carry the latest SKU mapping into the import flow."
+            />
+            <SummaryCard
+              icon={PackageSearch}
+              title="Unmatched Guidance"
+              value="Review"
+              detail="If rows do not match during inventory import, use the unmatched tools on that screen before moving into orders."
+            />
+          </section>
+
+          <section className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+            <Card className="border border-border/80 bg-card/95 shadow-sm">
+              <CardHeader className="gap-3 border-b border-border/70 pb-5">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px] tracking-[0.18em] uppercase">
+                    Workflow Help
+                  </Badge>
+                  <Sparkles className="size-4 text-muted-foreground" />
+                </div>
+                <CardTitle className="text-2xl font-semibold tracking-tight">
+                  Recommended import order
+                </CardTitle>
+                <CardDescription className="max-w-2xl text-sm leading-6">
+                  Keep the existing import tools doing the heavy lifting. The home screen just clarifies which screen to open next.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 py-6 md:grid-cols-3">
+                <WorkflowStep
+                  step="01"
+                  title="Import products first"
+                  description="Use Product Import to refresh catalog structure, new items, and product metadata before any inventory file is uploaded."
+                  href="/import"
+                  cta="Open Product Import"
+                />
+                <WorkflowStep
+                  step="02"
+                  title="Import inventory second"
+                  description="Once products are current, upload the inventory file to update counts and keep reorder inputs aligned to the latest catalog."
+                  href="/inventory-import"
+                  cta="Open Inventory Import"
+                />
+                <WorkflowStep
+                  step="03"
+                  title="Use unmatched tools if needed"
+                  description="If the inventory import reports unmatched rows, stay on that screen to download the unmatched CSV or create products from unmatched items."
+                  href="/inventory-import"
+                  cta="Review Unmatched Tools"
+                />
+              </CardContent>
+            </Card>
+
+            <Card className="border border-amber-200/80 bg-amber-50/70 shadow-sm">
+              <CardHeader className="gap-3 border-b border-amber-200/80 pb-5">
+                <div className="flex items-center gap-2 text-amber-900">
+                  <TriangleAlert className="size-4" />
+                  <CardTitle className="text-xl font-semibold tracking-tight">
+                    Import guardrails
+                  </CardTitle>
+                </div>
+                <CardDescription className="text-amber-900/80">
+                  This dashboard does not change import logic. It only routes the team into the right working screen.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 py-6">
+                <GuidanceItem
+                  title="Do product updates before inventory updates"
+                  description="That keeps inventory matching tied to the most current product list."
+                />
+                <GuidanceItem
+                  title="Resolve unmatched inventory on the import screen"
+                  description="Use the built-in unmatched CSV export and product creation tools when rows need attention."
+                />
+                <GuidanceItem
+                  title="Move to orders after imports are clean"
+                  description="Build or review purchase orders only after the import steps above are complete."
+                />
+              </CardContent>
+            </Card>
+          </section>
         </div>
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-          marginBottom: 24,
-        }}
-      >
-        <InfoCard
-          label="Logged In As"
-          value={profile?.full_name ?? user.email ?? "Unknown User"}
-          subvalue={profile?.role ? `Role: ${profile.role}` : ""}
-        />
-        <StatCard label="Products" value={String(productCount ?? 0)} />
-        <StatCard label="Purchase Orders" value={String(poCount ?? 0)} />
-        <StatCard label="Pending Approval" value={String(submittedCount ?? 0)} />
-        <StatCard label="Approved Orders" value={String(approvedCount ?? 0)} />
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-        }}
-      >
-        <QuickLinkCard
-          title="Inventory"
-          description="Review live products, on-hand counts, and par levels."
-          href="/inventory"
-        />
-        <QuickLinkCard
-          title="Orders"
-          description="Build reorder drafts, submit them, and export by distro."
-          href="/orders"
-        />
-        <QuickLinkCard
-          title="Order History"
-          description="Review past drafts, approvals, and line-item details."
-          href="/order-history"
-        />
-        {profile?.role === "manager" || profile?.role === "admin" ? (
-          <QuickLinkCard
-            title="Approvals"
-            description="Approve or reject submitted purchase orders."
-            href="/approvals"
-          />
-        ) : null}
-        <QuickLinkCard
-          title="Product Import"
-          description="Load product and menu data without touching inventory counts."
-          href="/import"
-        />
-        <QuickLinkCard
-          title="Inventory Import"
-          description="Update inventory counts and review unmatched inventory rows."
-          href="/inventory-import"
-        />
-      </div>
-    </PageShell>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 14,
-        padding: 18,
-        background: "#f8fafc",
-      }}
-    >
-      <div style={{ color: "#64748b", fontSize: 14 }}>{label}</div>
-      <div style={{ fontSize: 30, fontWeight: 700, marginTop: 8 }}>{value}</div>
+      </main>
     </div>
   );
 }
 
-function InfoCard({
+function HeroMetric({
   label,
   value,
-  subvalue,
+  detail,
 }: {
   label: string;
   value: string;
-  subvalue?: string;
+  detail: string;
 }) {
   return (
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 14,
-        padding: 18,
-        background: "#eff6ff",
-      }}
-    >
-      <div style={{ color: "#1d4ed8", fontSize: 14, fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8 }}>{value}</div>
-      {subvalue ? (
-        <div style={{ marginTop: 8, color: "#475569", fontSize: 14 }}>{subvalue}</div>
-      ) : null}
+    <div className="rounded-3xl border border-border/80 bg-background/85 p-5 shadow-sm backdrop-blur">
+      <p className="text-sm font-medium text-muted-foreground">{label}</p>
+      <p className="mt-3 text-3xl font-semibold tracking-tight text-foreground">{value}</p>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">{detail}</p>
     </div>
   );
 }
 
-function QuickLinkCard({
+function ActionCard({
+  href,
+  icon: Icon,
+  eyebrow,
   title,
   description,
-  href,
+  summary,
+  cta,
+  secondaryHref,
+  secondaryLabel,
 }: {
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+  eyebrow: string;
   title: string;
   description: string;
-  href: string;
+  summary: string;
+  cta: string;
+  secondaryHref?: string;
+  secondaryLabel?: string;
 }) {
   return (
-    <Link
-      href={href}
-      style={{
-        display: "block",
-        border: "1px solid #e5e7eb",
-        borderRadius: 14,
-        padding: 18,
-        background: "#fff",
-        textDecoration: "none",
-        color: "#0f172a",
-      }}
-    >
-      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>{title}</div>
-      <div style={{ color: "#64748b", fontSize: 14 }}>{description}</div>
-    </Link>
+    <Card className="border border-border/80 bg-card/95 shadow-sm">
+      <CardHeader className="gap-3 pb-2">
+        <div className="flex items-center justify-between gap-4">
+          <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px] tracking-[0.18em] uppercase">
+            {eyebrow}
+          </Badge>
+          <div className="rounded-2xl border border-border/80 bg-muted/50 p-2">
+            <Icon className="size-5 text-foreground" />
+          </div>
+        </div>
+        <CardTitle className="text-2xl font-semibold tracking-tight">{title}</CardTitle>
+        <CardDescription className="text-sm leading-6">{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5 pb-6">
+        <div className="rounded-2xl bg-muted/60 px-4 py-3 text-sm text-muted-foreground">{summary}</div>
+        <div className="flex flex-wrap gap-3">
+          <Button asChild className="rounded-full">
+            <Link href={href}>
+              {cta}
+              <ArrowRight className="size-4" />
+            </Link>
+          </Button>
+          {secondaryHref && secondaryLabel ? (
+            <Button asChild variant="outline" className="rounded-full">
+              <Link href={secondaryHref}>{secondaryLabel}</Link>
+            </Button>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
-function ActionLink({
-  href,
-  label,
-  tone = "default",
+function SummaryCard({
+  icon: Icon,
+  title,
+  value,
+  detail,
 }: {
-  href: string;
-  label: string;
-  tone?: "default" | "warm";
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  value: string;
+  detail: string;
 }) {
   return (
-    <Link
-      href={href}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: 42,
-        padding: "10px 16px",
-        borderRadius: 999,
-        textDecoration: "none",
-        fontWeight: 600,
-        border: tone === "warm" ? "1px solid #f5d0a9" : "1px solid #cbd5e1",
-        background: tone === "warm" ? "#fff7ed" : "#ffffff",
-        color: "#0f172a",
-      }}
-    >
-      {label}
-    </Link>
+    <Card className="border border-border/80 bg-card/90 shadow-sm">
+      <CardContent className="flex h-full flex-col gap-4 py-6">
+        <div className="flex items-center justify-between gap-4">
+          <div className="rounded-2xl border border-border/80 bg-muted/60 p-2.5">
+            <Icon className="size-5 text-foreground" />
+          </div>
+          <p className="text-sm font-medium text-muted-foreground">{title}</p>
+        </div>
+        <div>
+          <p className="text-3xl font-semibold tracking-tight text-foreground">{value}</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{detail}</p>
+        </div>
+      </CardContent>
+    </Card>
   );
+}
+
+function WorkflowStep({
+  step,
+  title,
+  description,
+  href,
+  cta,
+}: {
+  step: string;
+  title: string;
+  description: string;
+  href: string;
+  cta: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-border/80 bg-background/80 p-5 shadow-sm">
+      <div className="text-xs font-semibold tracking-[0.24em] text-muted-foreground uppercase">{step}</div>
+      <div className="mt-4 space-y-3">
+        <h3 className="text-lg font-semibold tracking-tight text-foreground">{title}</h3>
+        <p className="text-sm leading-6 text-muted-foreground">{description}</p>
+        <Button asChild variant="ghost" className="-ml-2 h-auto rounded-full px-2 py-1.5">
+          <Link href={href}>
+            {cta}
+            <ArrowRight className="size-4" />
+          </Link>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function GuidanceItem({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-amber-200/80 bg-background/75 p-4">
+      <h3 className="text-sm font-semibold text-amber-950">{title}</h3>
+      <p className="mt-2 text-sm leading-6 text-amber-950/80">{description}</p>
+    </div>
+  );
+}
+
+function formatNumber(value: number | null) {
+  return new Intl.NumberFormat("en-US").format(value ?? 0);
 }

@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { Compass, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
 export default function NavBar() {
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
   const pathname = usePathname();
   const [role, setRole] = useState<string>("");
 
@@ -52,27 +53,36 @@ export default function NavBar() {
   ];
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border/80 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-      <div className="mx-auto flex max-w-[1400px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+    <header className="sticky top-0 z-30 border-b border-border/80 bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+      <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <Link
               href="/dashboard"
-              className="inline-flex items-center gap-3 rounded-full border border-border/80 bg-card/80 px-4 py-2 text-sm font-semibold tracking-[0.18em] text-foreground uppercase shadow-sm transition hover:border-foreground/20 hover:bg-card"
+              className="inline-flex items-center gap-3 rounded-full border border-border/80 bg-card/90 px-4 py-2 text-sm font-semibold tracking-[0.18em] text-foreground uppercase shadow-sm transition hover:border-foreground/20 hover:bg-card"
             >
-              Pure Aloha
+              <Compass className="size-4" />
+              Pure Aloha Ordering
             </Link>
             <p className="mt-2 text-sm text-muted-foreground">
-              Navigate between the dashboard and import workflows without losing your place.
+              Dashboard, imports, inventory, and order review stay one click away.
             </p>
           </div>
 
-          <button
-            onClick={signOut}
-            className="inline-flex items-center justify-center rounded-full border border-border bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Log Out
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            {role ? (
+              <div className="inline-flex items-center rounded-full border border-border/80 bg-card/80 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                Role: {role}
+              </div>
+            ) : null}
+            <button
+              onClick={signOut}
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <LogOut className="size-4" />
+              Log Out
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-col gap-3">
@@ -92,7 +102,7 @@ export default function NavBar() {
                     "inline-flex items-center rounded-full border px-4 py-2 text-sm font-medium transition",
                     active
                       ? "border-foreground bg-foreground text-background shadow-lg shadow-foreground/10"
-                      : "border-border bg-card text-foreground hover:border-foreground/20 hover:bg-muted/60"
+                      : "border-border bg-card/90 text-foreground hover:border-foreground/20 hover:bg-muted/60"
                   )}
                 >
                   {link.label}
@@ -114,10 +124,10 @@ export default function NavBar() {
                   href={link.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "transition",
+                    "rounded-full px-2 py-1 transition",
                     active
-                      ? "font-semibold text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
+                      ? "bg-muted/70 font-semibold text-foreground"
+                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                   )}
                 >
                   {link.label}
