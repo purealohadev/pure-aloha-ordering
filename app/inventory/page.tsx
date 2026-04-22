@@ -50,7 +50,8 @@ export default async function InventoryPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Inventory</h1>
         <p className="text-muted-foreground">
-          Browse current products, inventory counts, and low-stock status.
+          Browse current products, inventory counts, and low-stock status in compact or expanded
+          views.
         </p>
       </div>
 

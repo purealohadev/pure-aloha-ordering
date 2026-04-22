@@ -1,17 +1,32 @@
 "use client";
-import React from "react";
+
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import {
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Minus,
+  Plus,
+  Search,
+  Send,
+  ShoppingCart,
+} from "lucide-react";
+import NavBar from "@/components/NavBar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
-import PageShell from "@/components/PageShell";
 
 type ProductRow = {
   id: string;
-  brand_name: string;
+  brand_name: string | null;
   product_name: string;
-  category: string;
-  distro: string;
-  current_price: number;
+  sku: string | null;
+  category: string | null;
+  distro: string | null;
+  current_price: number | null;
   inventory?: {
     on_hand: number;
     par_level: number;
@@ -22,15 +37,23 @@ type OrderRow = {
   id: string;
   brand_name: string;
   product_name: string;
-  category: string;
-  distro: string;
+  sku: string | null;
+  category: string | null;
+  vendor: string;
   current_price: number;
   onHand: number;
   par: number;
   suggested: number;
-  status: string;
+  status: "Out" | "Needs Reorder" | "Healthy";
   lineTotal: number;
 };
+
+type ViewMode = "compact" | "expanded";
+
+const currencyFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
 
 function exportCsv(filename: string, rows: Record<string, unknown>[]) {
   if (!rows.length) return;
@@ -47,7 +70,7 @@ function exportCsv(filename: string, rows: Record<string, unknown>[]) {
 
   const csv = [
     headers.join(","),
-    ...rows.map((row) => headers.map((h) => escapeCell(row[h])).join(",")),
+    ...rows.map((row) => headers.map((header) => escapeCell(row[header])).join(",")),
   ].join("\n");
 
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -61,53 +84,30 @@ function exportCsv(filename: string, rows: Record<string, unknown>[]) {
   URL.revokeObjectURL(url);
 }
 
-function getStatusStyle(status: string) {
+function getStatusTone(status: OrderRow["status"]) {
   if (status === "Out") {
-    return {
-      background: "#fee2e2",
-      color: "#991b1b",
-      padding: "4px 8px",
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      display: "inline-block",
-    };
+    return "border-red-200 bg-red-50 text-red-700";
   }
 
   if (status === "Needs Reorder") {
-    return {
-      background: "#fef3c7",
-      color: "#92400e",
-      padding: "4px 8px",
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      display: "inline-block",
-    };
+    return "border-amber-200 bg-amber-50 text-amber-700";
   }
 
-  return {
-    background: "#dcfce7",
-    color: "#166534",
-    padding: "4px 8px",
-    borderRadius: 999,
-    fontSize: 12,
-    fontWeight: 700,
-    display: "inline-block",
-  };
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
 }
 
 export default function OrdersPage() {
-  const supabase = createClient();
-
+  const [supabase] = useState(() => createClient());
   const [rows, setRows] = useState<OrderRow[]>([]);
-  const [role, setRole] = useState<string>("unknown");
+  const [role, setRole] = useState("unknown");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [showOnlyReorders, setShowOnlyReorders] = useState(true);
   const [search, setSearch] = useState("");
-  const [distroFilter, setDistroFilter] = useState("All");
-  const [isMobile, setIsMobile] = useState(true);
+  const [vendorFilter, setVendorFilter] = useState("All");
+  const [viewMode, setViewMode] = useState<ViewMode>("compact");
+  const [collapsedBrands, setCollapsedBrands] = useState<Record<string, boolean>>({});
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     async function loadData() {
@@ -138,6 +138,7 @@ export default function OrdersPage() {
           id,
           brand_name,
           product_name,
+          sku,
           category,
           distro,
           current_price,
@@ -154,58 +155,85 @@ export default function OrdersPage() {
         return;
       }
 
-      const mapped: OrderRow[] = (products as ProductRow[]).map((row) => {
-        const inv = row.inventory?.[0];
-        const onHand = Number(inv?.on_hand ?? 0);
-        const par = Number(inv?.par_level ?? 0);
-        const suggested = Math.max(par - onHand, 0);
+      const mapped = ((products as ProductRow[]) ?? [])
+        .map((row) => {
+          const inv = row.inventory?.[0];
+          const onHand = Number(inv?.on_hand ?? 0);
+          const par = Number(inv?.par_level ?? 0);
+          const suggested = Math.max(par - onHand, 0);
+          const status =
+            onHand <= 0 && par > 0
+              ? "Out"
+              : onHand < par
+                ? "Needs Reorder"
+                : "Healthy";
 
-        const status =
-          onHand <= 0 && par > 0
-            ? "Out"
-            : onHand < par
-            ? "Needs Reorder"
-            : "Healthy";
+          return {
+            id: row.id,
+            brand_name: row.brand_name?.trim() || "Unknown Brand",
+            product_name: row.product_name,
+            sku: row.sku,
+            category: row.category,
+            vendor: row.distro?.trim() || "Other",
+            current_price: Number(row.current_price ?? 0),
+            onHand,
+            par,
+            suggested,
+            status,
+            lineTotal: suggested * Number(row.current_price ?? 0),
+          } satisfies OrderRow;
+        })
+        .sort((a, b) => {
+          const brandCompare = a.brand_name.localeCompare(b.brand_name);
+          if (brandCompare !== 0) return brandCompare;
+          return a.product_name.localeCompare(b.product_name);
+        });
 
-        return {
-          id: row.id,
-          brand_name: row.brand_name,
-          product_name: row.product_name,
-          category: row.category,
-          distro: row.distro || "Other",
-          current_price: Number(row.current_price ?? 0),
-          onHand,
-          par,
-          suggested,
-          status,
-          lineTotal: suggested * Number(row.current_price ?? 0),
-        };
-      });
-
-      const filtered = (mapped || []).filter((p: any) => {
-  const onHand = p.on_hand ?? 0;
-  const par = p.par_level ?? 0;
-  return onHand <= par;
-});
-
-setRows(filtered);
+      setRows(mapped);
       setLoading(false);
     }
 
     loadData();
   }, [supabase]);
-  useEffect(() => {
-  function checkScreen() {
-    setIsMobile(window.innerWidth < 900);
-  }
 
-  checkScreen();
-  window.addEventListener("resize", checkScreen);
+  const vendors = useMemo(() => {
+    return ["All", ...Array.from(new Set(rows.map((row) => row.vendor))).sort()];
+  }, [rows]);
 
-  return () => window.removeEventListener("resize", checkScreen);
-}, []);
+  const filteredRows = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
 
-  function updateSuggested(id: string, value: string) {
+    return rows.filter((row) => {
+      const matchesReorder = showOnlyReorders ? row.suggested > 0 : true;
+      const matchesSearch =
+        normalizedSearch.length === 0 ||
+        `${row.brand_name} ${row.product_name} ${row.category ?? ""} ${row.vendor} ${row.sku ?? ""}`
+          .toLowerCase()
+          .includes(normalizedSearch);
+      const matchesVendor = vendorFilter === "All" ? true : row.vendor === vendorFilter;
+
+      return matchesReorder && matchesSearch && matchesVendor;
+    });
+  }, [rows, search, showOnlyReorders, vendorFilter]);
+
+  const brandGroups = useMemo(() => {
+    const groups = filteredRows.reduce<Record<string, OrderRow[]>>((acc, row) => {
+      if (!acc[row.brand_name]) {
+        acc[row.brand_name] = [];
+      }
+
+      acc[row.brand_name].push(row);
+      return acc;
+    }, {});
+
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  }, [filteredRows]);
+
+  const totalOrderValue = filteredRows.reduce((sum, row) => sum + row.lineTotal, 0);
+  const totalOrderUnits = filteredRows.reduce((sum, row) => sum + row.suggested, 0);
+  const activeOrderLines = filteredRows.filter((row) => row.suggested > 0).length;
+
+  function updateSuggested(id: string, value: number | string) {
     const qty = Math.max(0, Number(value) || 0);
 
     setRows((prev) =>
@@ -221,15 +249,51 @@ setRows(filtered);
     );
   }
 
+  function adjustSuggested(id: string, delta: number) {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== id) return row;
+
+        const suggested = Math.max(0, row.suggested + delta);
+        return {
+          ...row,
+          suggested,
+          lineTotal: suggested * Number(row.current_price ?? 0),
+        };
+      })
+    );
+  }
+
+  function isRowExpanded(id: string) {
+    return expandedRows[id] ?? viewMode === "expanded";
+  }
+
+  function toggleRowExpansion(id: string) {
+    setExpandedRows((prev) => ({
+      ...prev,
+      [id]: !isRowExpanded(id),
+    }));
+  }
+
+  function toggleBrand(brand: string) {
+    setCollapsedBrands((prev) => {
+      const isCollapsed = prev[brand] ?? false;
+      return {
+        ...prev,
+        [brand]: !isCollapsed,
+      };
+    });
+  }
+
   async function createOrder() {
     setMessage("");
 
     const lines = rows
-      .filter((r) => r.suggested > 0)
-      .map((r) => ({
-        product_id: r.id,
-        qty: r.suggested,
-        price: r.current_price,
+      .filter((row) => row.suggested > 0)
+      .map((row) => ({
+        product_id: row.id,
+        qty: row.suggested,
+        price: row.current_price,
       }));
 
     if (lines.length === 0) {
@@ -273,336 +337,544 @@ setRows(filtered);
     }
   }
 
-  const distros = useMemo(() => {
-    return ["All", ...Array.from(new Set(rows.map((r) => r.distro || "Other"))).sort()];
-  }, [rows]);
+  function exportAllOpenPO() {
+    const exportRows = filteredRows
+      .filter((row) => row.suggested > 0)
+      .map((row) => ({
+        distro: row.vendor,
+        brand_name: row.brand_name,
+        product_name: row.product_name,
+        category: row.category,
+        on_hand: row.onHand,
+        par_level: row.par,
+        order_qty: row.suggested,
+        unit_price: row.current_price,
+        line_total: row.lineTotal.toFixed(2),
+      }));
 
-  const filteredRows = useMemo(() => {
-    return rows.filter((row) => {
-      const matchesReorder = showOnlyReorders ? row.suggested > 0 : true;
-      const matchesSearch =
-        !search ||
-        `${row.brand_name} ${row.product_name} ${row.category} ${row.distro}`
-          .toLowerCase()
-          .includes(search.toLowerCase());
-      const matchesDistro = distroFilter === "All" ? true : row.distro === distroFilter;
+    if (!exportRows.length) {
+      setMessage("No reorder lines to export.");
+      return;
+    }
 
-      return matchesReorder && matchesSearch && matchesDistro;
-    });
-  }, [rows, showOnlyReorders, search, distroFilter]);
-
-  const totalOrderValue = filteredRows.reduce((sum, row) => sum + row.lineTotal, 0);
-const groupedRows = filteredRows.reduce((groups, row) => {
-  const key = row.distro || "Other";
-
-  if (!groups[key]) {
-    groups[key] = [];
+    exportCsv("all-open-purchase-orders.csv", exportRows);
+    setMessage("Exported all open purchase order lines.");
   }
 
-  groups[key].push(row);
-  return groups;
-}, {} as Record<string, OrderRow[]>);
-const groupedTotals = Object.fromEntries(
-  Object.entries(groupedRows).map(([distro, distroRows]) => [
-    distro,
-    distroRows.reduce((sum, row) => sum + row.lineTotal, 0),
-  ])
-);
- function exportAllOpenPO() {
-  const exportRows = filteredRows
-    .filter((r) => r.suggested > 0)
-    .map((r) => ({
-      distro: r.distro,
-      brand_name: r.brand_name,
-      product_name: r.product_name,
-      category: r.category,
-      on_hand: r.onHand,
-      par_level: r.par,
-      order_qty: r.suggested,
-      unit_price: r.current_price,
-      line_total: r.lineTotal.toFixed(2),
-    }));
+  function exportVendorPO(vendor: string) {
+    const exportRows = filteredRows
+      .filter((row) => row.vendor === vendor && row.suggested > 0)
+      .map((row) => ({
+        distro: row.vendor,
+        brand_name: row.brand_name,
+        product_name: row.product_name,
+        category: row.category,
+        on_hand: row.onHand,
+        par_level: row.par,
+        order_qty: row.suggested,
+        unit_price: row.current_price,
+        line_total: row.lineTotal.toFixed(2),
+      }));
 
-  if (!exportRows.length) {
-    setMessage("No reorder lines to export.");
-    return;
+    if (!exportRows.length) {
+      setMessage(`No reorder lines to export for ${vendor}.`);
+      return;
+    }
+
+    const safeName = vendor.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    exportCsv(`${safeName}-purchase-order.csv`, exportRows);
+    setMessage(`Exported purchase order for ${vendor}.`);
   }
 
-  exportCsv("all-open-purchase-orders.csv", exportRows);
-  setMessage("Exported all open purchase order lines.");
-}
-
-function exportDistroPO(distro: string) {
-  const exportRows = filteredRows
-    .filter((r) => r.distro === distro && r.suggested > 0)
-    .map((r) => ({
-      distro: r.distro,
-      brand_name: r.brand_name,
-      product_name: r.product_name,
-      category: r.category,
-      on_hand: r.onHand,
-      par_level: r.par,
-      order_qty: r.suggested,
-      unit_price: r.current_price,
-      line_total: r.lineTotal.toFixed(2),
-    }));
-
-  if (!exportRows.length) {
-    setMessage(`No reorder lines to export for ${distro}.`);
-    return;
-  }
-
-  const safeName = distro.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  exportCsv(`${safeName}-purchase-order.csv`, exportRows);
-  setMessage(`Exported purchase order for ${distro}.`);
-}
+  const isErrorMessage = message.startsWith("Error") || message === "Not logged in";
 
   return (
-    <PageShell
-      title="Orders"
-      subtitle="Review reorder items, edit quantities, submit drafts, and export by distro."
-    >
-      <div style={{ marginBottom: 18 }}>
-        <p style={{ margin: "0 0 8px 0" }}>
-          <strong>Role:</strong> {role}
-        </p>
-        <p style={{ margin: 0 }}>
-          <strong>Visible PO Value:</strong> ${totalOrderValue.toFixed(2)}
-        </p>
-      </div>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.08),_transparent_34%),radial-gradient(circle_at_right,_rgba(180,83,9,0.08),_transparent_28%),linear-gradient(to_bottom,_rgba(248,250,252,0.98),_rgba(255,255,255,1))]">
+      <NavBar />
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-        <button onClick={createOrder} style={primaryBtn}>
-          Create Order
-        </button>
+      <main className="px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-7xl flex-col gap-6">
+          <section className="overflow-hidden rounded-[2rem] border border-border/80 bg-card/90 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.45)]">
+            <div className="grid gap-6 px-6 py-7 sm:px-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] lg:px-10">
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge className="rounded-full bg-foreground px-3 py-1 text-[11px] tracking-[0.18em] text-background uppercase">
+                    Orders
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
+                    Role: {role}
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
+                    Default: Compact View
+                  </Badge>
+                </div>
 
-        <button onClick={submitLatestDraft} style={secondaryBtn}>
-          Submit Latest Draft
-        </button>
+                <div className="space-y-3">
+                  <h1 className="text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
+                    Faster ordering by brand
+                  </h1>
+                  <p className="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
+                    Keep the default view dense for rapid scanning, expand the full page when
+                    needed, or open a single product row without changing the current ordering flow.
+                  </p>
+                </div>
 
-        <button onClick={exportAllOpenPO} style={secondaryBtn}>
-          Export All Open POs
-        </button>
-      </div>
+                <div className="flex flex-wrap gap-3">
+                  <Button size="lg" className="rounded-full px-5" onClick={createOrder}>
+                    <ShoppingCart className="size-4" />
+                    Create Order
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="rounded-full px-5"
+                    onClick={submitLatestDraft}
+                  >
+                    <Send className="size-4" />
+                    Submit Latest Draft
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="rounded-full px-5"
+                    onClick={exportAllOpenPO}
+                  >
+                    <Download className="size-4" />
+                    Export All Open POs
+                  </Button>
+                </div>
+              </div>
 
-      <div
-        style={{
-          display: "flex",
-          gap: 12,
-          flexWrap: "wrap",
-          marginBottom: 16,
-          alignItems: "center",
-        }}
-      >
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={showOnlyReorders}
-            onChange={(e) => setShowOnlyReorders(e.target.checked)}
-          />
-          Show only reorder items
-        </label>
+              <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+                <MetricCard label="Visible brands" value={String(brandGroups.length)} />
+                <MetricCard label="Active order lines" value={String(activeOrderLines)} />
+                <MetricCard
+                  label="Visible PO value"
+                  value={currencyFormatter.format(totalOrderValue)}
+                />
+              </div>
+            </div>
+          </section>
 
-        <input
-          type="text"
-          placeholder="Search brand or product"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{
-            padding: 10,
-            minWidth: 240,
-            borderRadius: 10,
-            border: "1px solid #cbd5e1",
-          }}
-        />
+          <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(260px,0.75fr)]">
+            <Card className="border border-border/80 bg-card/95 shadow-sm">
+              <CardHeader className="gap-4 border-b border-border/70 pb-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="space-y-1">
+                    <CardTitle className="text-2xl font-semibold tracking-tight">
+                      Order Workspace
+                    </CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      Search, filter by vendor, and switch between compact and expanded defaults.
+                    </p>
+                  </div>
 
-        <select
-          value={distroFilter}
-          onChange={(e) => setDistroFilter(e.target.value)}
-          style={{
-            padding: 10,
-            borderRadius: 10,
-            border: "1px solid #cbd5e1",
-          }}
-        >
-          {distros.map((distro) => (
-            <option key={distro} value={distro}>
-              {distro}
-            </option>
-          ))}
-        </select>
-      </div>
+                  <div className="inline-flex rounded-full border border-border bg-muted/50 p-1">
+                    <ViewModeButton
+                      active={viewMode === "compact"}
+                      onClick={() => setViewMode("compact")}
+                    >
+                      Compact View
+                    </ViewModeButton>
+                    <ViewModeButton
+                      active={viewMode === "expanded"}
+                      onClick={() => setViewMode("expanded")}
+                    >
+                      Expanded View
+                    </ViewModeButton>
+                  </div>
+                </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
-        {distros
-          .filter((d) => d !== "All")
-          .map((distro) => (
-            <button
-              key={distro}
-              onClick={() => exportDistroPO(distro)}
-              style={secondaryBtn}
-            >
-              Export {distro}
-            </button>
-          ))}
-      </div>
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      type="text"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                      placeholder="Search brand, product, SKU, category, or vendor"
+                      className="pl-9"
+                    />
+                  </div>
 
-      {message ? (
-        <div
-          style={{
-            marginBottom: 18,
-            padding: 12,
-            borderRadius: 10,
-            background: "#eff6ff",
-            border: "1px solid #bfdbfe",
-            color: "#1d4ed8",
-          }}
-        >
-          {message}
+                  <select
+                    value={vendorFilter}
+                    onChange={(event) => setVendorFilter(event.target.value)}
+                    className="h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    aria-label="Filter by vendor"
+                  >
+                    {vendors.map((vendor) => (
+                      <option key={vendor} value={vendor}>
+                        {vendor === "All" ? "All vendors" : vendor}
+                      </option>
+                    ))}
+                  </select>
+
+                  <label className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-muted/40 px-3 py-2 text-sm font-medium text-foreground">
+                    <input
+                      type="checkbox"
+                      checked={showOnlyReorders}
+                      onChange={(event) => setShowOnlyReorders(event.target.checked)}
+                      className="size-4 rounded border-input"
+                    />
+                    Show only reorder items
+                  </label>
+                </div>
+              </CardHeader>
+
+              <CardContent className="space-y-6 pt-6">
+                {message ? (
+                  <div
+                    className={cn(
+                      "rounded-2xl border px-4 py-3 text-sm",
+                      isErrorMessage
+                        ? "border-red-200 bg-red-50 text-red-700"
+                        : "border-sky-200 bg-sky-50 text-sky-700"
+                    )}
+                  >
+                    {message}
+                  </div>
+                ) : null}
+
+                {loading ? (
+                  <div className="space-y-4">
+                    {Array.from({ length: 4 }).map((_, index) => (
+                      <div
+                        key={index}
+                        className="h-28 animate-pulse rounded-2xl border border-border/70 bg-muted/40"
+                      />
+                    ))}
+                  </div>
+                ) : brandGroups.length === 0 ? (
+                  <div className="rounded-3xl border border-dashed border-border bg-muted/20 px-6 py-12 text-center">
+                    <h2 className="text-lg font-semibold text-foreground">
+                      No products match these filters.
+                    </h2>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Adjust the search, vendor filter, or reorder-only toggle to see more products.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    {brandGroups.map(([brand, brandRows]) => {
+                      const isBrandExpanded = !(collapsedBrands[brand] ?? false);
+                      const brandValue = brandRows.reduce((sum, row) => sum + row.lineTotal, 0);
+                      const reorderCount = brandRows.filter((row) => row.suggested > 0).length;
+
+                      return (
+                        <section
+                          key={brand}
+                          className="overflow-hidden rounded-[1.75rem] border border-border/80 bg-white/95 shadow-sm"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleBrand(brand)}
+                            className="flex w-full items-center justify-between gap-4 border-b border-border/70 bg-[linear-gradient(135deg,rgba(15,23,42,0.07),rgba(180,83,9,0.14))] px-5 py-4 text-left transition hover:bg-[linear-gradient(135deg,rgba(15,23,42,0.1),rgba(180,83,9,0.18))] sm:px-6"
+                            aria-expanded={isBrandExpanded}
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <span className="rounded-full border border-border/80 bg-white/85 p-2 text-foreground shadow-sm">
+                                {isBrandExpanded ? (
+                                  <ChevronUp className="size-4" />
+                                ) : (
+                                  <ChevronDown className="size-4" />
+                                )}
+                              </span>
+                              <div className="min-w-0 space-y-1">
+                                <h2 className="text-xl font-semibold tracking-tight text-foreground">
+                                  {brand}
+                                </h2>
+                                <p className="text-sm text-muted-foreground">
+                                  {brandRows.length} product{brandRows.length === 1 ? "" : "s"} in
+                                  view
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+                                Brand Group
+                              </Badge>
+                              <Badge variant="outline" className="rounded-full px-3 py-1">
+                                {reorderCount} reorder line{reorderCount === 1 ? "" : "s"}
+                              </Badge>
+                              <Badge variant="outline" className="rounded-full px-3 py-1">
+                                {currencyFormatter.format(brandValue)}
+                              </Badge>
+                              <span className="min-w-24 text-right text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                                {isBrandExpanded ? "Collapse" : "Expand"}
+                              </span>
+                            </div>
+                          </button>
+
+                          {isBrandExpanded ? (
+                            <div className="divide-y divide-border/70">
+                              {brandRows.map((row) => {
+                                const rowExpanded = isRowExpanded(row.id);
+
+                                return (
+                                  <article key={row.id} className="px-4 py-4 sm:px-6">
+                                    <div className="rounded-[1.4rem] border border-border/80 bg-background/95 p-4 shadow-sm">
+                                      <div className="flex flex-col gap-4">
+                                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                          <div className="min-w-0">
+                                            <h3 className="truncate text-base font-semibold tracking-tight text-foreground sm:text-lg">
+                                              {row.product_name}
+                                            </h3>
+                                            <p className="mt-1 text-sm text-muted-foreground">
+                                              {row.brand_name}
+                                            </p>
+                                          </div>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleRowExpansion(row.id)}
+                                            className="inline-flex items-center gap-2 self-start rounded-full border border-border/80 bg-muted/20 px-3 py-2 text-sm font-medium text-foreground transition hover:bg-muted/40"
+                                            aria-expanded={rowExpanded}
+                                            aria-label={`${rowExpanded ? "Collapse" : "Expand"} details for ${row.product_name}`}
+                                          >
+                                            {rowExpanded ? (
+                                              <ChevronUp className="size-4" />
+                                            ) : (
+                                              <ChevronDown className="size-4" />
+                                            )}
+                                            {rowExpanded ? "Collapse" : "Expand"}
+                                          </button>
+                                        </div>
+
+                                        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_150px_150px_auto]">
+                                          <RowMetric label="Current Inventory" value={String(row.onHand)} />
+                                          <RowMetric label="Par Level" value={String(row.par)} />
+                                          <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-3">
+                                            <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                                              Order Quantity
+                                            </div>
+                                            <div className="mt-2 text-lg font-semibold tracking-tight text-foreground">
+                                              {row.suggested}
+                                            </div>
+                                          </div>
+                                          <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-3">
+                                            <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                                              Adjust Order
+                                            </div>
+                                            <div className="mt-2">
+                                              <QuantityStepper
+                                                value={row.suggested}
+                                                onDecrease={() => adjustSuggested(row.id, -1)}
+                                                onIncrease={() => adjustSuggested(row.id, 1)}
+                                                productName={row.product_name}
+                                              />
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {rowExpanded ? (
+                                          <div className="rounded-[1.3rem] border border-border/80 bg-muted/20 p-4 sm:p-5">
+                                            <div className="mb-4 flex flex-wrap items-center gap-2">
+                                              <Badge
+                                                variant="outline"
+                                                className={cn(
+                                                  "rounded-full px-3 py-1",
+                                                  getStatusTone(row.status)
+                                                )}
+                                              >
+                                                {row.status}
+                                              </Badge>
+                                              <Badge variant="outline" className="rounded-full px-3 py-1">
+                                                {currencyFormatter.format(row.lineTotal)} line total
+                                              </Badge>
+                                            </div>
+
+                                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                                              <DetailItem label="Brand" value={row.brand_name} />
+                                              <DetailItem label="SKU" value={row.sku || "—"} />
+                                              <DetailItem label="Category" value={row.category || "—"} />
+                                              <DetailItem label="Vendor" value={row.vendor} />
+                                              <DetailItem
+                                                label="Price"
+                                                value={currencyFormatter.format(row.current_price)}
+                                              />
+                                              <DetailItem
+                                                label="Current Inventory"
+                                                value={String(row.onHand)}
+                                              />
+                                              <DetailItem label="Par Level" value={String(row.par)} />
+                                              <div className="rounded-2xl border border-border/80 bg-background px-4 py-3 md:col-span-2 xl:col-span-2">
+                                                <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                                                  Order Quantity Controls
+                                                </div>
+                                                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                                                  <QuantityStepper
+                                                    value={row.suggested}
+                                                    onDecrease={() => adjustSuggested(row.id, -1)}
+                                                    onIncrease={() => adjustSuggested(row.id, 1)}
+                                                    productName={row.product_name}
+                                                  />
+                                                  <Input
+                                                    type="number"
+                                                    min="0"
+                                                    value={row.suggested}
+                                                    onChange={(event) =>
+                                                      updateSuggested(row.id, event.target.value)
+                                                    }
+                                                    className="w-full sm:w-28"
+                                                    aria-label={`Order quantity input for ${row.product_name}`}
+                                                  />
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </section>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="space-y-4">
+              <Card className="border border-border/80 bg-card/95 shadow-sm">
+                <CardHeader className="gap-2 border-b border-border/70 pb-4">
+                  <CardTitle className="text-xl font-semibold tracking-tight">
+                    Ordering Summary
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-3 pt-6">
+                  <MetricCard label="Visible units ordered" value={String(totalOrderUnits)} />
+                  <MetricCard
+                    label="Current view mode"
+                    value={viewMode === "compact" ? "Compact View" : "Expanded View"}
+                  />
+                  <MetricCard label="Vendor filter" value={vendorFilter} />
+                </CardContent>
+              </Card>
+
+              <Card className="border border-border/80 bg-card/95 shadow-sm">
+                <CardHeader className="gap-2 border-b border-border/70 pb-4">
+                  <CardTitle className="text-xl font-semibold tracking-tight">
+                    Export by Vendor
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-wrap gap-2 pt-6">
+                  {vendors
+                    .filter((vendor) => vendor !== "All")
+                    .map((vendor) => (
+                      <Button
+                        key={vendor}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="rounded-full"
+                        onClick={() => exportVendorPO(vendor)}
+                      >
+                        <Download className="size-3.5" />
+                        {vendor}
+                      </Button>
+                    ))}
+                </CardContent>
+              </Card>
+            </div>
+          </section>
         </div>
-      ) : null}
-
-      {loading ? (
-        <p>Loading...</p>
-      ) : (
-       <div
-  style={{
-    marginTop: 8,
-    overflowX: "auto",
-    WebkitOverflowScrolling: "touch",
-    border: "1px solid #e2e8f0",
-    borderRadius: 12,
-    background: "#fff",
-  }}
->{!isMobile && (
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
-            <thead style={{ background: "#f8fafc" }}>
-              <tr>
-                <th style={th}>Brand</th>
-                <th style={th}>Product</th>
-                <th style={{ ...th, display: "none" }}>
-  Category
-</th>
-                <th style={th}>Distro</th>
-                <th style={th}>On Hand</th>
-                <th style={th}>Par</th>
-                <th style={th}>Suggested</th>
-                <th style={th}>Status</th>
-                <th style={th}>Price</th>
-                <th style={th}>Line Total</th>
-              </tr>
-            </thead>
-            <tbody>
-  {Object.entries(groupedRows).map(([distro, distroRows]) => (
-    <React.Fragment key={distro}>
-      <tr key={`group-${distro}`}>
-  <td
-    colSpan={10}
-    style={{
-      ...td,
-      fontWeight: 700,
-      background: "#f8fafc",
-      borderTop: "2px solid #cbd5e1",
-    }}
-  >
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-      }}
-    >
-      <span>
-        {distro} — Total: ${Number(groupedTotals[distro] ?? 0).toFixed(2)}
-      </span>
-
-      <button
-        onClick={() => exportDistroPO(distro)}
-        style={{
-          padding: "6px 10px",
-          borderRadius: 8,
-          border: "1px solid #cbd5e1",
-          background: "#fff",
-          cursor: "pointer",
-          fontWeight: 600,
-        }}
-      >
-        Export {distro}
-      </button>
+      </main>
     </div>
-  </td>
-</tr>
-
-      {distroRows.map((row) => (
-        <tr key={row.id}>
-          <td style={td}>{row.brand_name}</td>
-          <td style={td}>{row.product_name}</td>
-          <td style={{ ...td, display: "none" }}>{row.category}</td>
-          <td style={td}>{row.distro}</td>
-          <td style={td}>{row.onHand}</td>
-          <td style={td}>{row.par}</td>
-          <td style={td}>
-            <input
-              type="number"
-              min="0"
-              value={row.suggested}
-              onChange={(e) => updateSuggested(row.id, e.target.value)}
-              style={{
-                width: 72,
-                padding: 6,
-                borderRadius: 8,
-                border: "1px solid #cbd5e1",
-              }}
-            />
-          </td>
-          <td style={td}>
-            <span style={getStatusStyle(row.status)}>
-              {row.status}
-            </span>
-          </td>
-          <td style={td}>${Number(row.current_price ?? 0).toFixed(2)}</td>
-          <td style={td}>${row.lineTotal.toFixed(2)}</td>
-        </tr>
-      ))}
-    </React.Fragment>
-  ))}
-            </tbody>
-          </table>
-          )}
-        </div>
-      )}
-    </PageShell>
   );
 }
 
-const th = {
-  borderBottom: "1px solid #ddd",
-  textAlign: "left" as const,
-  padding: "12px 10px",
-  fontSize: 14,
-};
+function ViewModeButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-full px-4 py-2 text-sm font-medium transition",
+        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
 
-const td = {
-  borderBottom: "1px solid #eee",
-  padding: "10px",
-  fontSize: 14,
-};
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-4">
+      <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-foreground">{value}</div>
+    </div>
+  );
+}
 
-const primaryBtn = {
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "1px solid #0f172a",
-  background: "#0f172a",
-  color: "#fff",
-  cursor: "pointer",
-};
+function RowMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-3">
+      <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+        {label}
+      </div>
+      <div className="mt-2 text-lg font-semibold tracking-tight text-foreground">{value}</div>
+    </div>
+  );
+}
 
-const secondaryBtn = {
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "1px solid #cbd5e1",
-  background: "#fff",
-  color: "#0f172a",
-  cursor: "pointer",
-};
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border/80 bg-background px-4 py-3">
+      <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+        {label}
+      </div>
+      <div className="mt-1 text-sm font-medium text-foreground">{value}</div>
+    </div>
+  );
+}
 
+function QuantityStepper({
+  onDecrease,
+  onIncrease,
+  productName,
+  value,
+}: {
+  onDecrease: () => void;
+  onIncrease: () => void;
+  productName: string;
+  value: number;
+}) {
+  return (
+    <div className="inline-flex items-center rounded-full border border-border bg-background p-1">
+      <button
+        type="button"
+        onClick={onDecrease}
+        className="inline-flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        aria-label={`Decrease order quantity for ${productName}`}
+      >
+        <Minus className="size-4" />
+      </button>
+      <span className="min-w-12 text-center text-base font-semibold text-foreground">{value}</span>
+      <button
+        type="button"
+        onClick={onIncrease}
+        className="inline-flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        aria-label={`Increase order quantity for ${productName}`}
+      >
+        <Plus className="size-4" />
+      </button>
+    </div>
+  );
+}
