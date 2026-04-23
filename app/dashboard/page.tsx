@@ -71,6 +71,49 @@ export default async function DashboardPage() {
 
       <main className="px-4 py-8 sm:px-6 lg:px-8">
         <div className="mx-auto flex max-w-7xl flex-col gap-8">
+          <section className="rounded-[1.75rem] border border-border/80 bg-card/85 p-5 shadow-sm sm:p-6">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-2">
+                <div className="inline-flex items-center rounded-full border border-border/80 bg-background/80 px-3 py-1 text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                  Quick Navigation
+                </div>
+                <div className="space-y-1">
+                  <h2 className="text-xl font-semibold tracking-tight text-foreground">
+                    Keep the import workflow visible from home
+                  </h2>
+                  <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+                    The top navigation stays active on every screen, and these shortcuts open each import tool directly from the dashboard.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-3 lg:min-w-[520px]">
+                <div className="rounded-2xl border border-foreground bg-foreground px-4 py-3 text-background shadow-lg shadow-foreground/10">
+                  <div className="text-sm font-semibold">Dashboard</div>
+                  <div className="text-xs text-background/80">You are here</div>
+                </div>
+                <Button asChild variant="outline" className="h-auto justify-between rounded-2xl px-4 py-3">
+                  <Link href="/import">
+                    <span className="text-left">
+                      <span className="block text-sm font-semibold">Product Import</span>
+                      <span className="block text-xs text-muted-foreground">Open step one</span>
+                    </span>
+                    <FileSpreadsheet className="size-4" />
+                  </Link>
+                </Button>
+                <Button asChild variant="outline" className="h-auto justify-between rounded-2xl px-4 py-3">
+                  <Link href="/inventory-import">
+                    <span className="text-left">
+                      <span className="block text-sm font-semibold">Inventory Import</span>
+                      <span className="block text-xs text-muted-foreground">Open step two</span>
+                    </span>
+                    <Warehouse className="size-4" />
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          </section>
+
           <section className="overflow-hidden rounded-[2rem] border border-border/80 bg-card/90 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.45)]">
             <div className="grid gap-8 px-6 py-8 sm:px-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] lg:px-10 lg:py-10">
               <div className="space-y-6">

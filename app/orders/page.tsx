@@ -285,6 +285,18 @@ export default function OrdersPage() {
     });
   }
 
+  function collapseAllBrands() {
+    setCollapsedBrands(
+      Object.fromEntries(brandGroups.map(([brand]) => [brand, true]))
+    );
+  }
+
+  function expandAllBrands() {
+    setCollapsedBrands(
+      Object.fromEntries(brandGroups.map(([brand]) => [brand, false]))
+    );
+  }
+
   async function createOrder() {
     setMessage("");
 
@@ -485,6 +497,29 @@ export default function OrdersPage() {
                   </div>
                 </div>
 
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-full"
+                    onClick={collapseAllBrands}
+                    disabled={brandGroups.length === 0}
+                  >
+                    Collapse All Brands
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-full"
+                    onClick={expandAllBrands}
+                    disabled={brandGroups.length === 0}
+                  >
+                    Expand All Brands
+                  </Button>
+                </div>
+
                 <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -522,7 +557,7 @@ export default function OrdersPage() {
                 </div>
               </CardHeader>
 
-              <CardContent className="space-y-6 pt-6">
+              <CardContent className="space-y-4 pt-4">
                 {message ? (
                   <div
                     className={cn(
@@ -555,7 +590,7 @@ export default function OrdersPage() {
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-5">
+                  <div className="space-y-4">
                     {brandGroups.map(([brand, brandRows]) => {
                       const isBrandExpanded = !(collapsedBrands[brand] ?? false);
                       const brandValue = brandRows.reduce((sum, row) => sum + row.lineTotal, 0);
@@ -564,29 +599,37 @@ export default function OrdersPage() {
                       return (
                         <section
                           key={brand}
-                          className="overflow-hidden rounded-[1.75rem] border border-border/80 bg-white/95 shadow-sm"
+                          className="mt-2 overflow-hidden rounded-2xl border border-border/80 bg-white/95 shadow-sm first:mt-0"
                         >
                           <button
                             type="button"
                             onClick={() => toggleBrand(brand)}
-                            className="flex w-full items-center justify-between gap-4 border-b border-border/70 bg-[linear-gradient(135deg,rgba(15,23,42,0.07),rgba(180,83,9,0.14))] px-5 py-4 text-left transition hover:bg-[linear-gradient(135deg,rgba(15,23,42,0.1),rgba(180,83,9,0.18))] sm:px-6"
+                            className="flex w-full items-center justify-between gap-3 border-b border-border/70 bg-[linear-gradient(135deg,rgba(148,163,184,0.16),rgba(226,232,240,0.72))] px-4 py-3 text-left transition hover:bg-[linear-gradient(135deg,rgba(148,163,184,0.22),rgba(226,232,240,0.9))] sm:px-5"
                             aria-expanded={isBrandExpanded}
                           >
                             <div className="flex min-w-0 items-center gap-3">
-                              <span className="rounded-full border border-border/80 bg-white/85 p-2 text-foreground shadow-sm">
+                              <span className="rounded-full border border-border/80 bg-white/90 p-2 text-foreground shadow-sm">
                                 {isBrandExpanded ? (
                                   <ChevronUp className="size-4" />
                                 ) : (
                                   <ChevronDown className="size-4" />
                                 )}
                               </span>
-                              <div className="min-w-0 space-y-1">
-                                <h2 className="text-xl font-semibold tracking-tight text-foreground">
-                                  {brand}
-                                </h2>
+                              <div className="min-w-0 space-y-1.5">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h2 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">
+                                    {brand}
+                                  </h2>
+                                  <Badge
+                                    variant="secondary"
+                                    className="rounded-full border border-border/70 bg-white/85 px-2.5 py-0.5 text-[11px] font-semibold text-foreground"
+                                  >
+                                    {brandRows.length} product{brandRows.length === 1 ? "" : "s"}
+                                  </Badge>
+                                </div>
                                 <p className="text-sm text-muted-foreground">
-                                  {brandRows.length} product{brandRows.length === 1 ? "" : "s"} in
-                                  view
+                                  {reorderCount} reorder line{reorderCount === 1 ? "" : "s"} ready
+                                  in this section
                                 </p>
                               </div>
                             </div>
@@ -596,31 +639,113 @@ export default function OrdersPage() {
                                 Brand Group
                               </Badge>
                               <Badge variant="outline" className="rounded-full px-3 py-1">
-                                {reorderCount} reorder line{reorderCount === 1 ? "" : "s"}
-                              </Badge>
-                              <Badge variant="outline" className="rounded-full px-3 py-1">
                                 {currencyFormatter.format(brandValue)}
                               </Badge>
-                              <span className="min-w-24 text-right text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                              <span className="inline-flex min-w-28 items-center justify-end gap-2 rounded-full border border-border/70 bg-white/80 px-3 py-1 text-right text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
                                 {isBrandExpanded ? "Collapse" : "Expand"}
+                                {isBrandExpanded ? (
+                                  <ChevronUp className="size-3.5" />
+                                ) : (
+                                  <ChevronDown className="size-3.5" />
+                                )}
                               </span>
                             </div>
                           </button>
 
                           {isBrandExpanded ? (
-                            <div className="divide-y divide-border/70">
+                            <div
+                              className={cn(
+                                viewMode === "compact"
+                                  ? "grid gap-2 p-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
+                                  : "divide-y divide-border/70"
+                              )}
+                            >
                               {brandRows.map((row) => {
                                 const rowExpanded = isRowExpanded(row.id);
+                                const needsReorderHighlight = row.onHand < row.par;
+
+                                if (!rowExpanded) {
+                                  return (
+                                    <article
+                                      key={row.id}
+                                      className={cn(
+                                        "h-[80px] rounded-lg border border-border/70 bg-background p-2 shadow-sm",
+                                        needsReorderHighlight && "bg-amber-50/25"
+                                      )}
+                                    >
+                                      <div className="flex h-full min-h-0 flex-col justify-between gap-1">
+                                        <div className="flex min-w-0 items-start justify-between gap-1.5">
+                                          <div className="min-w-0 flex-1">
+                                            <div className="overflow-hidden text-sm font-medium leading-4 text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+                                              {row.product_name}
+                                            </div>
+                                            <div className="truncate text-xs leading-3 text-muted-foreground">
+                                              {[row.brand_name, row.category].filter(Boolean).join(" · ")}
+                                            </div>
+                                          </div>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleRowExpansion(row.id)}
+                                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                                            aria-expanded={rowExpanded}
+                                            aria-label={`Expand details for ${row.product_name}`}
+                                          >
+                                            <ChevronDown className="size-3.5" />
+                                          </button>
+                                        </div>
+
+                                        <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-3 text-muted-foreground">
+                                          <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
+                                            <span>Inv {row.onHand}</span>
+                                            <span aria-hidden="true">·</span>
+                                            <span>Par {row.par}</span>
+                                          </div>
+                                          <CompactQuantityStepper
+                                            value={row.suggested}
+                                            onDecrease={() => adjustSuggested(row.id, -1)}
+                                            onIncrease={() => adjustSuggested(row.id, 1)}
+                                            productName={row.product_name}
+                                          />
+                                        </div>
+                                      </div>
+                                    </article>
+                                  );
+                                }
 
                                 return (
-                                  <article key={row.id} className="px-4 py-4 sm:px-6">
-                                    <div className="rounded-[1.4rem] border border-border/80 bg-background/95 p-4 shadow-sm">
+                                  <article
+                                    key={row.id}
+                                    className={cn(
+                                      viewMode === "compact"
+                                        ? "sm:col-span-2 md:col-span-4 xl:col-span-5 2xl:col-span-6"
+                                        : "px-4 py-4 sm:px-6"
+                                    )}
+                                  >
+                                    <div
+                                      className={cn(
+                                        "rounded-[1.4rem] border bg-background/95 p-4 shadow-sm",
+                                        needsReorderHighlight
+                                          ? "border-amber-200/80 bg-amber-50/25"
+                                          : "border-border/80"
+                                      )}
+                                    >
                                       <div className="flex flex-col gap-4">
                                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                                           <div className="min-w-0">
-                                            <h3 className="truncate text-base font-semibold tracking-tight text-foreground sm:text-lg">
-                                              {row.product_name}
-                                            </h3>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <h3 className="truncate text-base font-semibold tracking-tight text-foreground sm:text-lg">
+                                                {row.product_name}
+                                              </h3>
+                                              {needsReorderHighlight ? (
+                                                <Badge
+                                                  variant="outline"
+                                                  className="rounded-full border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700"
+                                                >
+                                                  Low
+                                                </Badge>
+                                              ) : null}
+                                            </div>
                                             <p className="mt-1 text-sm text-muted-foreground">
                                               {row.brand_name}
                                             </p>
@@ -876,5 +1001,39 @@ function QuantityStepper({
         <Plus className="size-4" />
       </button>
     </div>
+  );
+}
+
+function CompactQuantityStepper({
+  onDecrease,
+  onIncrease,
+  productName,
+  value,
+}: {
+  onDecrease: () => void;
+  onIncrease: () => void;
+  productName: string;
+  value: number;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1 align-middle text-foreground">
+      <button
+        type="button"
+        onClick={onDecrease}
+        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        aria-label={`Decrease order quantity for ${productName}`}
+      >
+        <Minus className="size-3" />
+      </button>
+      <span className="min-w-4 text-center text-xs font-semibold tabular-nums">{value}</span>
+      <button
+        type="button"
+        onClick={onIncrease}
+        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        aria-label={`Increase order quantity for ${productName}`}
+      >
+        <Plus className="size-3" />
+      </button>
+    </span>
   );
 }

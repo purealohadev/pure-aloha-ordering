@@ -5,7 +5,9 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
+  Minus,
   Package2,
+  Plus,
   Search,
   ShoppingCart,
 } from "lucide-react"
@@ -280,26 +282,100 @@ export default function InventoryCards({ items }: Props) {
           </div>
         </CardHeader>
 
-        <CardContent className="space-y-3 pt-6">
-          {filteredItems.map((item) => {
-            const inventory = item.inventory ?? 0
-            const threshold = item.low_stock_threshold ?? 5
-            const tone = stockTone(inventory, threshold)
-            const isOut = inventory <= 0
-            const isExpanded = isItemExpanded(item.id)
+        <CardContent className="space-y-3 pt-4">
+          {filteredItems.length > 0 ? (
+            <div
+              className={cn(
+                viewMode === "compact"
+                  ? "grid gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
+                  : "space-y-3"
+              )}
+            >
+              {filteredItems.map((item) => {
+                const inventory = item.inventory ?? 0
+                const threshold = item.low_stock_threshold ?? 5
+                const tone = stockTone(inventory, threshold)
+                const isOut = inventory <= 0
+                const isExpanded = isItemExpanded(item.id)
+                const needsReorder = inventory < threshold
 
-            return (
-              <article
-                key={item.id}
-                className="rounded-[1.5rem] border border-border/80 bg-white shadow-sm"
-              >
-                <div className="flex flex-col gap-4 p-4 sm:p-5">
+                if (!isExpanded) {
+                  return (
+                    <article
+                      key={item.id}
+                      className={cn(
+                        "h-[80px] rounded-lg border border-border/70 bg-background p-2 shadow-sm",
+                        needsReorder && "bg-amber-50/25"
+                      )}
+                    >
+                      <div className="flex h-full min-h-0 flex-col justify-between gap-1">
+                        <div className="flex min-w-0 items-start justify-between gap-1.5">
+                          <div className="min-w-0 flex-1">
+                            <div className="overflow-hidden text-sm font-medium leading-4 text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+                              {item.name}
+                            </div>
+                            <div className="truncate text-xs leading-3 text-muted-foreground">
+                              {[item.brand || "Unknown brand", item.category].filter(Boolean).join(" · ")}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => toggleItemExpansion(item.id)}
+                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                            aria-expanded={isExpanded}
+                            aria-label={`Expand details for ${item.name}`}
+                          >
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-3 text-muted-foreground">
+                          <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
+                            <span className={tone.textClass}>Inv {inventory}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>Par {threshold}</span>
+                          </div>
+                          <CompactQuantityStepper
+                            value={getQty(item.id)}
+                            onDecrease={() => setQty(item.id, String(getQty(item.id) - 1))}
+                            onIncrease={() => setQty(item.id, String(getQty(item.id) + 1))}
+                            productName={item.name}
+                          />
+                        </div>
+                      </div>
+                    </article>
+                  )
+                }
+
+                return (
+                  <article
+                    key={item.id}
+                    className={cn(
+                      viewMode === "compact"
+                        ? "sm:col-span-2 md:col-span-4 xl:col-span-5 2xl:col-span-6"
+                        : "",
+                      "rounded-[1.5rem] border bg-white shadow-sm",
+                      needsReorder
+                        ? "border-amber-200/80 bg-amber-50/30"
+                        : "border-border/80"
+                    )}
+                  >
+                    <div className="flex flex-col gap-4 p-4 sm:p-5">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h2 className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
                           {item.name}
                         </h2>
+                        {needsReorder ? (
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700"
+                          >
+                            Low
+                          </Badge>
+                        ) : null}
                         <Badge variant="outline" className={cn("rounded-full", tone.badgeClass)}>
                           {tone.label}
                         </Badge>
@@ -394,10 +470,12 @@ export default function InventoryCards({ items }: Props) {
                       </div>
                     </div>
                   ) : null}
-                </div>
-              </article>
-            )
-          })}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          ) : null}
 
           {filteredItems.length === 0 ? (
             <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
@@ -470,5 +548,39 @@ function DetailPanelItem({ label, value }: { label: string; value: string }) {
       </div>
       <div className="mt-1 text-sm font-medium text-foreground">{value}</div>
     </div>
+  )
+}
+
+function CompactQuantityStepper({
+  onDecrease,
+  onIncrease,
+  productName,
+  value,
+}: {
+  onDecrease: () => void
+  onIncrease: () => void
+  productName: string
+  value: number
+}) {
+  return (
+    <span className="inline-flex items-center gap-1 align-middle text-foreground">
+      <button
+        type="button"
+        onClick={onDecrease}
+        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        aria-label={`Decrease quantity for ${productName}`}
+      >
+        <Minus className="h-3 w-3" />
+      </button>
+      <span className="min-w-4 text-center text-xs font-semibold tabular-nums">{value}</span>
+      <button
+        type="button"
+        onClick={onIncrease}
+        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        aria-label={`Increase quantity for ${productName}`}
+      >
+        <Plus className="h-3 w-3" />
+      </button>
+    </span>
   )
 }
