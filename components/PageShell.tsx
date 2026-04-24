@@ -10,28 +10,20 @@ export default function PageShell({
   children: React.ReactNode;
 }) {
   return (
-    <main style={{ minHeight: "100vh", background: "#f8fafc", fontFamily: "sans-serif" }}>
+    <main className="dark min-h-screen bg-zinc-900 font-sans text-white">
       <NavBar />
-      <div style={{ maxWidth: 1400, margin: "0 auto", padding: 24 }}>
-        <div style={{ marginBottom: 20 }}>
-          <h1 style={{ margin: 0, fontSize: 28 }}>{title}</h1>
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold tracking-tight text-blue-400">{title}</h1>
           {subtitle ? (
-            <p style={{ marginTop: 8, color: "#475569" }}>{subtitle}</p>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{subtitle}</p>
           ) : null}
         </div>
 
-        <div
-          style={{
-            background: "#fff",
-            border: "1px solid #e5e7eb",
-            borderRadius: 16,
-            padding: 20,
-          }}
-        >
+        <div className="rounded-2xl border border-zinc-700 bg-zinc-800 p-4 shadow-sm sm:p-5">
           {children}
         </div>
       </div>
     </main>
   );
 }
-

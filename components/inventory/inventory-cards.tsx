@@ -4,6 +4,7 @@ import { useMemo, useState } from "react"
 import {
   AlertTriangle,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Minus,
   Package2,
@@ -21,6 +22,7 @@ export type InventoryItem = {
   id: string
   name: string
   brand: string | null
+  distributor: string | null
   category: string | null
   sku: string | null
   price: number | null
@@ -35,35 +37,221 @@ type Props = {
 
 type ViewMode = "compact" | "expanded"
 
+type BrandGroup = {
+  name: string
+  items: InventoryItem[]
+}
+
+type DistributorGroup = {
+  name: string
+  itemsCount: number
+  brands: BrandGroup[]
+}
+
+const ACCESSORIES_GROUP_NAME = "Accessories / Non-Consumables"
+const UNKNOWN_DISTRIBUTOR = "Unknown Distributor"
+const UNKNOWN_BRAND = "Unknown Brand"
+
+const DISTRIBUTOR_DISPLAY_ORDER = [
+  "KSS",
+  "Nabis",
+  "UpNorth",
+  "Big Oil",
+  "Other",
+  UNKNOWN_DISTRIBUTOR,
+  ACCESSORIES_GROUP_NAME,
+]
+
+const BRAND_DISTRIBUTOR_GROUPS = {
+  KSS: [
+    "Kiva",
+    "Lost Farm",
+    "Pacific Stone",
+    "Garden Society",
+    "Seed Junky",
+    "Uncle Arnie's",
+    "Arcata Fire",
+    "Nasha",
+    "CANN",
+    "The Tablet",
+    "Emerald Sky",
+    "Gelato",
+    "Keef",
+    "Level",
+    "Big Pete's",
+    "Autumn Brands",
+    "Pax Labs",
+    "The Pairist",
+    "CLSICS",
+    "El Blunto",
+    "PRESHA",
+    "Tiny Fires",
+    "Awesome Dope",
+    "Ultra",
+    "Northern Harvest",
+    "Saida",
+  ],
+  Nabis: [
+    "Auntie Aloha",
+    "Dompen",
+    "KOA",
+    "Delighted",
+    "Liquid Flower",
+    "Mary's Medicinals",
+    "Kikoko",
+    "Green Vibe",
+    "Moon Valley",
+    "OM",
+    "Raw Garden",
+    "Yummi Karma",
+    "Vet CBD",
+    "Statehouse",
+  ],
+  UpNorth: ["UpNorth", "Fig Farm", "Globs", "Daze Off"],
+  "Big Oil": ["Bear Labs", "WVY"],
+  Other: ["Boutiq", "Sherbinski"],
+} as const
+
+const BRAND_DISTRIBUTOR_FALLBACK = new Map<string, string>(
+  Object.entries(BRAND_DISTRIBUTOR_GROUPS).flatMap(([distributor, brands]) =>
+    brands.map((brand) => [normalizeGroupKey(brand), distributor])
+  )
+)
+
+const DISTRIBUTOR_ORDER_INDEX = new Map(
+  DISTRIBUTOR_DISPLAY_ORDER.map((name, index) => [name, index])
+)
+
+const NON_CONSUMABLE_CATEGORIES = new Set(
+  [
+    "Accessories",
+    "Batteries",
+    "Hardware",
+    "Glass",
+    "Dab Tool",
+    "Grinder",
+    "Pipe",
+    "Water Pipe",
+    "Torch",
+    "Rolling Papers",
+    "Trays",
+    "Merch",
+  ].map(normalizeGroupKey)
+)
+
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
 })
 
+function normalizeGroupKey(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function displayGroupName(value: string | null | undefined, fallback: string) {
+  const trimmed = value?.trim()
+  return trimmed && trimmed.length > 0 ? trimmed : fallback
+}
+
+function isNonConsumable(item: InventoryItem) {
+  return item.category ? NON_CONSUMABLE_CATEGORIES.has(normalizeGroupKey(item.category)) : false
+}
+
+function getDisplayDistributorName(item: InventoryItem) {
+  if (isNonConsumable(item)) {
+    return ACCESSORIES_GROUP_NAME
+  }
+
+  const distributorName = item.distributor?.trim()
+  if (distributorName) {
+    return distributorName
+  }
+
+  const brandName = item.brand?.trim()
+  if (!brandName) {
+    return UNKNOWN_DISTRIBUTOR
+  }
+
+  return BRAND_DISTRIBUTOR_FALLBACK.get(normalizeGroupKey(brandName)) ?? UNKNOWN_DISTRIBUTOR
+}
+
+function groupItemsByDistributorAndBrand(items: InventoryItem[]): DistributorGroup[] {
+  const distributorMap = new Map<string, Map<string, InventoryItem[]>>()
+
+  for (const item of items) {
+    const distributorName = getDisplayDistributorName(item)
+    const brandName = displayGroupName(item.brand, UNKNOWN_BRAND)
+    const brandMap = distributorMap.get(distributorName) ?? new Map<string, InventoryItem[]>()
+    const brandItems = brandMap.get(brandName) ?? []
+
+    brandItems.push(item)
+    brandMap.set(brandName, brandItems)
+    distributorMap.set(distributorName, brandMap)
+  }
+
+  return Array.from(distributorMap.entries())
+    .map(([name, brandMap]) => {
+      const brands = Array.from(brandMap.entries())
+        .map(([brandName, brandItems]) => ({
+          name: brandName,
+          items: brandItems.sort((a, b) => a.name.localeCompare(b.name)),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+
+      return {
+        name,
+        itemsCount: brands.reduce((total, brand) => total + brand.items.length, 0),
+        brands,
+      }
+    })
+    .sort((a, b) => {
+      const aOrder = DISTRIBUTOR_ORDER_INDEX.get(a.name)
+      const bOrder = DISTRIBUTOR_ORDER_INDEX.get(b.name)
+
+      if (aOrder != null && bOrder != null) {
+        return aOrder - bOrder
+      }
+
+      if (aOrder != null) return -1
+      if (bOrder != null) return 1
+
+      return a.name.localeCompare(b.name)
+    })
+}
+
 function stockTone(inventory: number, threshold: number) {
   if (inventory <= 0) {
     return {
       label: "Out of stock",
-      badgeClass: "bg-red-100 text-red-700 border-red-200",
-      textClass: "text-red-600",
-      panelClass: "border-red-200/70 bg-red-50/60",
+      badgeClass: "border-red-500/40 bg-red-500/10 text-red-400",
+      textClass: "text-red-400",
+      panelClass: "border-zinc-700 bg-zinc-900",
     }
   }
 
-  if (inventory <= threshold) {
+  if (inventory < threshold) {
     return {
       label: "Low stock",
-      badgeClass: "bg-amber-100 text-amber-700 border-amber-200",
-      textClass: "text-amber-700",
-      panelClass: "border-amber-200/70 bg-amber-50/60",
+      badgeClass: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400",
+      textClass: "text-yellow-400",
+      panelClass: "border-zinc-700 bg-zinc-900",
+    }
+  }
+
+  if (inventory > threshold) {
+    return {
+      label: "In stock",
+      badgeClass: "border-green-500/40 bg-green-500/10 text-green-400",
+      textClass: "text-green-400",
+      panelClass: "border-zinc-700 bg-zinc-900",
     }
   }
 
   return {
-    label: "In stock",
-    badgeClass: "bg-emerald-100 text-emerald-700 border-emerald-200",
-    textClass: "text-emerald-700",
-    panelClass: "border-emerald-200/70 bg-emerald-50/60",
+    label: "At par",
+    badgeClass: "border-zinc-600 bg-zinc-900 text-zinc-300",
+    textClass: "text-zinc-300",
+    panelClass: "border-zinc-700 bg-zinc-900",
   }
 }
 
@@ -72,6 +260,8 @@ export default function InventoryCards({ items }: Props) {
   const [category, setCategory] = useState("all")
   const [stockFilter, setStockFilter] = useState<"all" | "in" | "low" | "out">("all")
   const [viewMode, setViewMode] = useState<ViewMode>("compact")
+  const [collapsedDistributors, setCollapsedDistributors] = useState<Record<string, boolean>>({})
+  const [collapsedBrands, setCollapsedBrands] = useState<Record<string, boolean>>({})
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({})
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [addingId, setAddingId] = useState<string | null>(null)
@@ -100,6 +290,7 @@ export default function InventoryCards({ items }: Props) {
         q.length === 0 ||
         item.name?.toLowerCase().includes(q) ||
         item.brand?.toLowerCase().includes(q) ||
+        item.distributor?.toLowerCase().includes(q) ||
         item.category?.toLowerCase().includes(q) ||
         item.sku?.toLowerCase().includes(q)
 
@@ -114,6 +305,10 @@ export default function InventoryCards({ items }: Props) {
       return matchesQuery && matchesCategory && matchesStock
     })
   }, [items, query, category, stockFilter])
+
+  const groupedItems = useMemo(() => {
+    return groupItemsByDistributorAndBrand(filteredItems)
+  }, [filteredItems])
 
   function getQty(productId: string) {
     return quantities[productId] ?? 1
@@ -135,6 +330,22 @@ export default function InventoryCards({ items }: Props) {
     setExpandedItems((prev) => ({
       ...prev,
       [itemId]: !isItemExpanded(itemId),
+    }))
+  }
+
+  function toggleDistributor(distributorName: string) {
+    setCollapsedDistributors((prev) => ({
+      ...prev,
+      [distributorName]: !prev[distributorName],
+    }))
+  }
+
+  function toggleBrand(distributorName: string, brandName: string) {
+    const key = `${distributorName}::${brandName}`
+
+    setCollapsedBrands((prev) => ({
+      ...prev,
+      [key]: !prev[key],
     }))
   }
 
@@ -184,22 +395,200 @@ export default function InventoryCards({ items }: Props) {
     }
   }
 
+  function renderInventoryItem(item: InventoryItem) {
+    const inventory = item.inventory ?? 0
+    const threshold = item.low_stock_threshold ?? 5
+    const tone = stockTone(inventory, threshold)
+    const isOut = inventory <= 0
+    const isExpanded = isItemExpanded(item.id)
+    const needsReorder = inventory < threshold
+
+    if (!isExpanded) {
+      return (
+        <article
+          key={item.id}
+          className="h-[80px] rounded-lg border border-zinc-700 bg-zinc-800 p-2 font-sans shadow-sm transition hover:bg-zinc-700"
+        >
+          <div className="flex h-full min-h-0 flex-col justify-between gap-1">
+            <div className="flex min-w-0 items-start justify-between gap-1.5">
+              <div className="min-w-0 flex-1">
+                <div className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
+                  {item.name}
+                </div>
+                <div className="truncate text-[11px] leading-tight text-zinc-400">
+                  {[item.brand || UNKNOWN_BRAND, item.category].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => toggleItemExpansion(item.id)}
+                className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-600 hover:text-white"
+                aria-expanded={isExpanded}
+                aria-label={`Expand details for ${item.name}`}
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-tight text-zinc-400">
+              <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
+                <span className={tone.textClass}>Inv {inventory}</span>
+                <span aria-hidden="true">·</span>
+                <span>Par {threshold}</span>
+              </div>
+              <CompactQuantityStepper
+                value={getQty(item.id)}
+                onDecrease={() => setQty(item.id, String(getQty(item.id) - 1))}
+                onIncrease={() => setQty(item.id, String(getQty(item.id) + 1))}
+                productName={item.name}
+              />
+            </div>
+          </div>
+        </article>
+      )
+    }
+
+    return (
+      <article
+        key={item.id}
+        className={cn(
+          viewMode === "compact"
+            ? "sm:col-span-2 md:col-span-4 xl:col-span-5 2xl:col-span-6"
+            : "",
+          "rounded-[1.5rem] border border-zinc-700 bg-zinc-800 font-sans shadow-sm"
+        )}
+      >
+        <div className="flex flex-col gap-4 p-4 sm:p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
+                  {item.name}
+                </h2>
+                {needsReorder ? (
+                  <Badge
+                    variant="outline"
+                    className="rounded-full border-yellow-500/40 bg-yellow-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-yellow-400"
+                  >
+                    Low
+                  </Badge>
+                ) : null}
+                <Badge variant="outline" className={cn("rounded-full", tone.badgeClass)}>
+                  {tone.label}
+                </Badge>
+              </div>
+              <p className="mt-1 text-xs leading-tight text-zinc-400">
+                {item.brand || UNKNOWN_BRAND}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => toggleItemExpansion(item.id)}
+              className="inline-flex items-center gap-2 self-start rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-700 hover:text-white"
+              aria-expanded={isExpanded}
+              aria-label={`${isExpanded ? "Collapse" : "Expand"} details for ${item.name}`}
+            >
+              {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {isExpanded ? "Collapse" : "Expand"}
+            </button>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_170px_170px]">
+            <SummaryPanel
+              label="Current Inventory"
+              value={String(inventory)}
+              toneClass={tone.textClass}
+              emphasized
+            />
+            <SummaryPanel label="Reorder Threshold" value={String(threshold)} />
+            <div className={cn("rounded-2xl border px-4 py-3", tone.panelClass)}>
+              <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
+                <Package2 className="h-3.5 w-3.5" />
+                Stock status
+              </div>
+              <div className={cn("mt-2 flex items-center gap-2 text-sm font-semibold", tone.textClass)}>
+                {inventory <= threshold ? <AlertTriangle className="h-4 w-4" /> : null}
+                <span>{tone.label}</span>
+              </div>
+            </div>
+          </div>
+
+          {isExpanded ? (
+            <div className="rounded-[1.35rem] border border-zinc-700 bg-zinc-900 p-4 sm:p-5">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                <DetailPanelItem label="Brand" value={item.brand || UNKNOWN_BRAND} />
+                <DetailPanelItem label="Category" value={item.category || "—"} />
+                <DetailPanelItem label="SKU" value={item.sku || "—"} />
+                <DetailPanelItem
+                  label="Price"
+                  value={item.price != null ? currencyFormatter.format(item.price) : "—"}
+                />
+                <DetailPanelItem
+                  label="Inventory"
+                  value={String(inventory)}
+                  valueClassName={tone.textClass}
+                />
+                <DetailPanelItem label="Reorder Threshold" value={String(threshold)} />
+
+                <div className="rounded-2xl border border-zinc-700 bg-zinc-800 px-4 py-3 md:col-span-2 xl:col-span-2">
+                  <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
+                    Add to order
+                  </div>
+                  <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div className="sm:w-32">
+                      <label className="mb-1 block text-xs uppercase tracking-[0.04em] text-zinc-400">
+                        Qty to order
+                      </label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={getQty(item.id)}
+                        onChange={(event) => setQty(item.id, event.target.value)}
+                        className="border-zinc-700 bg-zinc-900 font-sans text-white focus-visible:border-zinc-500"
+                      />
+                    </div>
+
+                    <Button
+                      type="button"
+                      onClick={() => addToOrder(item)}
+                      disabled={isOut || addingId === item.id}
+                      className="border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-700 hover:text-white sm:min-w-40"
+                    >
+                      <ShoppingCart className="mr-2 h-4 w-4" />
+                      {addingId === item.id ? "Adding..." : "Add to Order"}
+                    </Button>
+                  </div>
+
+                  {message[item.id] ? (
+                    <p className="mt-3 text-xs leading-tight text-zinc-400">{message[item.id]}</p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </article>
+    )
+  }
+
   return (
-    <div className="space-y-6">
-      <Card className="rounded-[1.75rem] border border-border/80 bg-white/95 shadow-sm">
-        <CardHeader className="gap-4 border-b border-border/70 pb-5">
+    <div className="space-y-6 font-sans">
+      <Card className="rounded-[1.75rem] border border-zinc-700 bg-zinc-800 font-sans text-white shadow-sm">
+        <CardHeader className="gap-4 border-b border-zinc-700 pb-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="space-y-1">
-              <CardTitle className="text-2xl font-semibold tracking-tight">
+              <CardTitle className="font-sans text-2xl font-semibold tracking-tight text-blue-400">
                 Inventory Workspace
               </CardTitle>
-              <p className="text-sm text-muted-foreground">
+              <p className="font-sans text-sm text-zinc-400">
                 Scan the essentials in compact mode and open a single product only when you need
                 the extra details or actions.
               </p>
             </div>
 
-            <div className="inline-flex rounded-full border border-border bg-muted/50 p-1">
+            <div className="inline-flex rounded-full border border-zinc-700 bg-zinc-900 p-1">
               <ViewModeButton
                 active={viewMode === "compact"}
                 onClick={() => setViewMode("compact")}
@@ -217,12 +606,12 @@ export default function InventoryCards({ items }: Props) {
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
             <div className="relative w-full">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search name, brand, category, or SKU"
-                className="pl-9"
+                placeholder="Search name, distributor, brand, category, or SKU"
+                className="border-zinc-700 bg-zinc-900 pl-9 font-sans text-white placeholder:text-zinc-500 focus-visible:border-zinc-500"
               />
             </div>
 
@@ -234,7 +623,12 @@ export default function InventoryCards({ items }: Props) {
                   variant={category === value ? "default" : "outline"}
                   size="sm"
                   onClick={() => setCategory(value)}
-                  className="rounded-full"
+                  className={cn(
+                    "rounded-full border-zinc-700",
+                    category === value
+                      ? "bg-zinc-700 text-white hover:bg-zinc-600"
+                      : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                  )}
                 >
                   {value === "all" ? "All categories" : value}
                 </Button>
@@ -248,7 +642,12 @@ export default function InventoryCards({ items }: Props) {
               variant={stockFilter === "all" ? "default" : "outline"}
               size="sm"
               onClick={() => setStockFilter("all")}
-              className="rounded-full"
+              className={cn(
+                "rounded-full border-zinc-700",
+                stockFilter === "all"
+                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
+                  : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+              )}
             >
               All stock
             </Button>
@@ -257,7 +656,12 @@ export default function InventoryCards({ items }: Props) {
               variant={stockFilter === "in" ? "default" : "outline"}
               size="sm"
               onClick={() => setStockFilter("in")}
-              className="rounded-full"
+              className={cn(
+                "rounded-full border-zinc-700",
+                stockFilter === "in"
+                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
+                  : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+              )}
             >
               In stock
             </Button>
@@ -266,7 +670,12 @@ export default function InventoryCards({ items }: Props) {
               variant={stockFilter === "low" ? "default" : "outline"}
               size="sm"
               onClick={() => setStockFilter("low")}
-              className="rounded-full"
+              className={cn(
+                "rounded-full border-zinc-700",
+                stockFilter === "low"
+                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
+                  : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+              )}
             >
               Low stock
             </Button>
@@ -275,210 +684,105 @@ export default function InventoryCards({ items }: Props) {
               variant={stockFilter === "out" ? "default" : "outline"}
               size="sm"
               onClick={() => setStockFilter("out")}
-              className="rounded-full"
+              className={cn(
+                "rounded-full border-zinc-700",
+                stockFilter === "out"
+                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
+                  : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+              )}
             >
               Out of stock
             </Button>
           </div>
         </CardHeader>
 
-        <CardContent className="space-y-3 pt-4">
-          {filteredItems.length > 0 ? (
-            <div
-              className={cn(
-                viewMode === "compact"
-                  ? "grid gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
-                  : "space-y-3"
-              )}
-            >
-              {filteredItems.map((item) => {
-                const inventory = item.inventory ?? 0
-                const threshold = item.low_stock_threshold ?? 5
-                const tone = stockTone(inventory, threshold)
-                const isOut = inventory <= 0
-                const isExpanded = isItemExpanded(item.id)
-                const needsReorder = inventory < threshold
+        <CardContent className="space-y-4 pt-4">
+          {groupedItems.length > 0 ? (
+            groupedItems.map((distributorGroup) => {
+              const distributorCollapsed = collapsedDistributors[distributorGroup.name] ?? false
 
-                if (!isExpanded) {
-                  return (
-                    <article
-                      key={item.id}
-                      className={cn(
-                        "h-[80px] rounded-lg border border-border/70 bg-background p-2 shadow-sm",
-                        needsReorder && "bg-amber-50/25"
-                      )}
-                    >
-                      <div className="flex h-full min-h-0 flex-col justify-between gap-1">
-                        <div className="flex min-w-0 items-start justify-between gap-1.5">
-                          <div className="min-w-0 flex-1">
-                            <div className="overflow-hidden text-sm font-medium leading-4 text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
-                              {item.name}
-                            </div>
-                            <div className="truncate text-xs leading-3 text-muted-foreground">
-                              {[item.brand || "Unknown brand", item.category].filter(Boolean).join(" · ")}
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => toggleItemExpansion(item.id)}
-                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                            aria-expanded={isExpanded}
-                            aria-label={`Expand details for ${item.name}`}
-                          >
-                            <ChevronDown className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-
-                        <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-3 text-muted-foreground">
-                          <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
-                            <span className={tone.textClass}>Inv {inventory}</span>
-                            <span aria-hidden="true">·</span>
-                            <span>Par {threshold}</span>
-                          </div>
-                          <CompactQuantityStepper
-                            value={getQty(item.id)}
-                            onDecrease={() => setQty(item.id, String(getQty(item.id) - 1))}
-                            onIncrease={() => setQty(item.id, String(getQty(item.id) + 1))}
-                            productName={item.name}
-                          />
-                        </div>
-                      </div>
-                    </article>
-                  )
-                }
-
-                return (
-                  <article
-                    key={item.id}
-                    className={cn(
-                      viewMode === "compact"
-                        ? "sm:col-span-2 md:col-span-4 xl:col-span-5 2xl:col-span-6"
-                        : "",
-                      "rounded-[1.5rem] border bg-white shadow-sm",
-                      needsReorder
-                        ? "border-amber-200/80 bg-amber-50/30"
-                        : "border-border/80"
-                    )}
+              return (
+                <section
+                  key={distributorGroup.name}
+                  className="overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900/60"
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleDistributor(distributorGroup.name)}
+                    className="flex w-full items-center justify-between gap-3 border-b border-zinc-700 bg-zinc-800 px-4 py-3 text-left transition hover:bg-zinc-700"
+                    aria-expanded={!distributorCollapsed}
                   >
-                    <div className="flex flex-col gap-4 p-4 sm:p-5">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
-                          {item.name}
-                        </h2>
-                        {needsReorder ? (
-                          <Badge
-                            variant="outline"
-                            className="rounded-full border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700"
-                          >
-                            Low
-                          </Badge>
-                        ) : null}
-                        <Badge variant="outline" className={cn("rounded-full", tone.badgeClass)}>
-                          {tone.label}
-                        </Badge>
-                      </div>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {item.brand || "Unknown brand"}
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => toggleItemExpansion(item.id)}
-                      className="inline-flex items-center gap-2 self-start rounded-full border border-border/80 bg-muted/20 px-3 py-2 text-sm font-medium text-foreground transition hover:bg-muted/40"
-                      aria-expanded={isExpanded}
-                      aria-label={`${isExpanded ? "Collapse" : "Expand"} details for ${item.name}`}
-                    >
-                      {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                      {isExpanded ? "Collapse" : "Expand"}
-                    </button>
-                  </div>
-
-                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_170px_170px]">
-                    <SummaryPanel
-                      label="Current Inventory"
-                      value={String(inventory)}
-                      toneClass={tone.textClass}
-                      emphasized
-                    />
-                    <SummaryPanel label="Reorder Threshold" value={String(threshold)} />
-                    <div
-                      className={cn(
-                        "rounded-2xl border px-4 py-3",
-                        tone.panelClass
+                    <span className="flex min-w-0 items-center gap-3">
+                      {distributorCollapsed ? (
+                        <ChevronRight className="h-5 w-5 shrink-0 text-blue-300" />
+                      ) : (
+                        <ChevronDown className="h-5 w-5 shrink-0 text-blue-300" />
                       )}
-                    >
-                      <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-                        <Package2 className="h-3.5 w-3.5" />
-                        Stock status
-                      </div>
-                      <div className={cn("mt-2 flex items-center gap-2 text-sm font-semibold", tone.textClass)}>
-                        {inventory <= threshold ? <AlertTriangle className="h-4 w-4" /> : null}
-                        <span>{tone.label}</span>
-                      </div>
-                    </div>
-                  </div>
+                      <span className="truncate text-lg font-semibold tracking-tight text-blue-300">
+                        {distributorGroup.name}
+                      </span>
+                    </span>
+                    <span className="shrink-0 rounded-full border border-zinc-600 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300">
+                      {distributorGroup.itemsCount} items
+                    </span>
+                  </button>
 
-                  {isExpanded ? (
-                    <div className="rounded-[1.35rem] border border-border/80 bg-muted/20 p-4 sm:p-5">
-                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-                        <DetailPanelItem label="Brand" value={item.brand || "Unknown brand"} />
-                        <DetailPanelItem label="Category" value={item.category || "—"} />
-                        <DetailPanelItem label="SKU" value={item.sku || "—"} />
-                        <DetailPanelItem
-                          label="Price"
-                          value={item.price != null ? currencyFormatter.format(item.price) : "—"}
-                        />
-                        <DetailPanelItem label="Inventory" value={String(inventory)} />
-                        <DetailPanelItem label="Reorder Threshold" value={String(threshold)} />
+                  {!distributorCollapsed ? (
+                    <div className="space-y-3 p-3 sm:p-4">
+                      {distributorGroup.brands.map((brandGroup) => {
+                        const brandKey = `${distributorGroup.name}::${brandGroup.name}`
+                        const brandCollapsed = collapsedBrands[brandKey] ?? false
 
-                        <div className="rounded-2xl border border-border/80 bg-background px-4 py-3 md:col-span-2 xl:col-span-2">
-                          <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-                            Add to order
-                          </div>
-                          <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
-                            <div className="sm:w-32">
-                              <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
-                                Qty to order
-                              </label>
-                              <Input
-                                type="number"
-                                min={1}
-                                value={getQty(item.id)}
-                                onChange={(event) => setQty(item.id, event.target.value)}
-                              />
-                            </div>
-
-                            <Button
+                        return (
+                          <section
+                            key={brandKey}
+                            className="rounded-xl border border-zinc-700 bg-zinc-900"
+                          >
+                            <button
                               type="button"
-                              onClick={() => addToOrder(item)}
-                              disabled={isOut || addingId === item.id}
-                              className="sm:min-w-40"
+                              onClick={() => toggleBrand(distributorGroup.name, brandGroup.name)}
+                              className="flex w-full items-center justify-between gap-3 border-b border-zinc-700 px-3 py-2.5 text-left transition hover:bg-zinc-800"
+                              aria-expanded={!brandCollapsed}
                             >
-                              <ShoppingCart className="mr-2 h-4 w-4" />
-                              {addingId === item.id ? "Adding..." : "Add to Order"}
-                            </Button>
-                          </div>
+                              <span className="flex min-w-0 items-center gap-2">
+                                {brandCollapsed ? (
+                                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" />
+                                )}
+                                <span className="truncate text-sm font-semibold text-zinc-100">
+                                  {brandGroup.name}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-xs text-zinc-400">
+                                {brandGroup.items.length} items
+                              </span>
+                            </button>
 
-                          {message[item.id] ? (
-                            <p className="mt-3 text-sm text-muted-foreground">{message[item.id]}</p>
-                          ) : null}
-                        </div>
-                      </div>
+                            {!brandCollapsed ? (
+                              <div
+                                className={cn(
+                                  "p-3",
+                                  viewMode === "compact"
+                                    ? "grid gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
+                                    : "space-y-3"
+                                )}
+                              >
+                                {brandGroup.items.map((item) => renderInventoryItem(item))}
+                              </div>
+                            ) : null}
+                          </section>
+                        )
+                      })}
                     </div>
                   ) : null}
-                    </div>
-                  </article>
-                )
-              })}
-            </div>
+                </section>
+              )
+            })
           ) : null}
 
           {filteredItems.length === 0 ? (
-            <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
+            <div className="rounded-2xl border border-dashed border-zinc-700 p-10 text-center text-sm text-zinc-400">
               No inventory items match your filters.
             </div>
           ) : null}
@@ -503,7 +807,7 @@ function ViewModeButton({
       onClick={onClick}
       className={cn(
         "rounded-full px-4 py-2 text-sm font-medium transition",
-        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+        active ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
       )}
     >
       {children}
@@ -523,13 +827,13 @@ function SummaryPanel({
   emphasized?: boolean
 }) {
   return (
-    <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-3">
-      <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+    <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3">
+      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
         {label}
       </div>
       <div
         className={cn(
-          "mt-2 text-base font-semibold tracking-tight text-foreground",
+          "mt-2 text-base font-semibold tracking-tight text-white",
           emphasized && "text-lg",
           toneClass
         )}
@@ -540,13 +844,21 @@ function SummaryPanel({
   )
 }
 
-function DetailPanelItem({ label, value }: { label: string; value: string }) {
+function DetailPanelItem({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string
+  value: string
+  valueClassName?: string
+}) {
   return (
-    <div className="rounded-2xl border border-border/80 bg-background px-4 py-3">
-      <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+    <div className="rounded-2xl border border-zinc-700 bg-zinc-800 px-4 py-3">
+      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
         {label}
       </div>
-      <div className="mt-1 text-sm font-medium text-foreground">{value}</div>
+      <div className={cn("mt-1 text-sm font-medium text-white", valueClassName)}>{value}</div>
     </div>
   )
 }
@@ -563,11 +875,11 @@ function CompactQuantityStepper({
   value: number
 }) {
   return (
-    <span className="inline-flex items-center gap-1 align-middle text-foreground">
+    <span className="inline-flex items-center gap-1 align-middle text-xs text-white">
       <button
         type="button"
         onClick={onDecrease}
-        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        className="inline-flex size-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
         aria-label={`Decrease quantity for ${productName}`}
       >
         <Minus className="h-3 w-3" />
@@ -576,7 +888,7 @@ function CompactQuantityStepper({
       <button
         type="button"
         onClick={onIncrease}
-        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        className="inline-flex size-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
         aria-label={`Increase quantity for ${productName}`}
       >
         <Plus className="h-3 w-3" />

@@ -349,7 +349,7 @@ export default function ImportUploadClient({
   return (
     <section className="space-y-6">
       <header className="space-y-3">
-        <div className="inline-flex items-center rounded-full border border-border bg-background/80 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground shadow-sm">
+        <div className="inline-flex items-center rounded-full border border-border bg-background/80 px-3 py-1 text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground shadow-sm">
           Spreadsheet Import
         </div>
         <div className="space-y-2">
@@ -425,7 +425,7 @@ export default function ImportUploadClient({
                     </div>
                   </div>
 
-                  <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                  <div className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
                     Accepted: CSV, XLSX, XLS
                   </div>
                 </div>
@@ -492,7 +492,7 @@ export default function ImportUploadClient({
           <div className="space-y-6 p-6 sm:p-8">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="space-y-2">
-                <div className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">
+                <div className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-amber-800">
                   <AlertCircle className="h-3.5 w-3.5" />
                   Review Required
                 </div>
@@ -629,7 +629,7 @@ function StatBox({
         tone === "warning" && "border-amber-200 bg-amber-50/70"
       )}
     >
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+      <div className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         {label}
       </div>
       <div className="mt-2 text-3xl font-semibold tracking-tight text-foreground">

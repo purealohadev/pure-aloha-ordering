@@ -5,8 +5,9 @@ import PageShell from "@/components/PageShell";
 function getStatusStyle(status: string) {
   if (status === "approved") {
     return {
-      background: "#dcfce7",
-      color: "#166534",
+      background: "rgba(34, 197, 94, 0.12)",
+      color: "#4ade80",
+      border: "1px solid rgba(34, 197, 94, 0.35)",
       padding: "4px 8px",
       borderRadius: 999,
       fontSize: 12,
@@ -17,8 +18,9 @@ function getStatusStyle(status: string) {
 
   if (status === "rejected") {
     return {
-      background: "#fee2e2",
-      color: "#991b1b",
+      background: "rgba(239, 68, 68, 0.12)",
+      color: "#f87171",
+      border: "1px solid rgba(239, 68, 68, 0.35)",
       padding: "4px 8px",
       borderRadius: 999,
       fontSize: 12,
@@ -28,8 +30,9 @@ function getStatusStyle(status: string) {
   }
 
   return {
-    background: "#fef3c7",
-    color: "#92400e",
+    background: "rgba(234, 179, 8, 0.12)",
+    color: "#facc15",
+    border: "1px solid rgba(234, 179, 8, 0.35)",
     padding: "4px 8px",
     borderRadius: 999,
     fontSize: 12,
@@ -47,7 +50,7 @@ export default async function OrderHistoryPage() {
 
   if (!user) {
     return (
-      <main style={{ padding: 24 }}>
+      <main style={{ minHeight: "100vh", padding: 24, background: "#18181b", color: "#fff" }}>
         <h1>Order History</h1>
         <p>Not logged in.</p>
         <Link href="/login">Go to login</Link>
@@ -98,14 +101,14 @@ export default async function OrderHistoryPage() {
       {error ? (
         <div
           style={{
-            marginBottom: 18,
-            padding: 12,
-            borderRadius: 10,
-            background: "#fee2e2",
-            border: "1px solid #fecaca",
-            color: "#991b1b",
-          }}
-        >
+          marginBottom: 18,
+          padding: 12,
+          borderRadius: 10,
+          background: "rgba(239, 68, 68, 0.12)",
+          border: "1px solid rgba(239, 68, 68, 0.35)",
+          color: "#f87171",
+        }}
+      >
           <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
             {JSON.stringify(error, null, 2)}
           </pre>
@@ -115,12 +118,12 @@ export default async function OrderHistoryPage() {
       <div
         style={{
           overflowX: "auto",
-          border: "1px solid #e5e7eb",
+          border: "1px solid #3f3f46",
           borderRadius: 12,
         }}
       >
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
-          <thead style={{ background: "#f8fafc" }}>
+          <thead style={{ background: "#18181b" }}>
             <tr>
               <th style={th}>Order ID</th>
               <th style={th}>Status</th>
@@ -166,28 +169,29 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
-        border: "1px solid #e5e7eb",
+        border: "1px solid #3f3f46",
         borderRadius: 14,
         padding: 18,
-        background: "#f8fafc",
+        background: "#18181b",
       }}
     >
-      <div style={{ color: "#64748b", fontSize: 14 }}>{label}</div>
-      <div style={{ fontSize: 30, fontWeight: 700, marginTop: 8 }}>{value}</div>
+      <div style={{ color: "#a1a1aa", fontSize: 14 }}>{label}</div>
+      <div style={{ color: "#fff", fontSize: 30, fontWeight: 700, marginTop: 8 }}>{value}</div>
     </div>
   );
 }
 
 const th = {
-  borderBottom: "1px solid #ddd",
+  borderBottom: "1px solid #3f3f46",
+  color: "#a1a1aa",
   textAlign: "left" as const,
   padding: "12px 10px",
   fontSize: 14,
 };
 
 const td = {
-  borderBottom: "1px solid #eee",
+  borderBottom: "1px solid #3f3f46",
+  color: "#e4e4e7",
   padding: "10px",
   fontSize: 14,
 };
-

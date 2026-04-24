@@ -25,7 +25,7 @@ export default async function DashboardPage() {
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.05),_transparent_40%),linear-gradient(to_bottom,_rgba(248,250,252,0.95),_rgba(255,255,255,1))] px-6 py-10">
+      <main className="dark min-h-screen bg-zinc-900 px-6 py-10 text-white">
         <div className="mx-auto max-w-xl rounded-3xl border border-border bg-card p-8 shadow-sm">
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">Dashboard</h1>
           <p className="mt-3 text-sm text-muted-foreground">You need to sign in to access the ordering home screen.</p>
@@ -66,7 +66,7 @@ export default async function DashboardPage() {
   const displayName = profile?.full_name ?? profile?.email ?? user.email ?? "Team Member";
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.08),_transparent_34%),radial-gradient(circle_at_right,_rgba(180,83,9,0.08),_transparent_28%),linear-gradient(to_bottom,_rgba(248,250,252,0.98),_rgba(255,255,255,1))]">
+    <div className="dark min-h-screen bg-zinc-900 text-white">
       <NavBar />
 
       <main className="px-4 py-8 sm:px-6 lg:px-8">
@@ -74,7 +74,7 @@ export default async function DashboardPage() {
           <section className="rounded-[1.75rem] border border-border/80 bg-card/85 p-5 shadow-sm sm:p-6">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div className="space-y-2">
-                <div className="inline-flex items-center rounded-full border border-border/80 bg-background/80 px-3 py-1 text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                <div className="inline-flex items-center rounded-full border border-border/80 bg-background/80 px-3 py-1 text-xs font-semibold tracking-[0.08em] text-muted-foreground uppercase">
                   Quick Navigation
                 </div>
                 <div className="space-y-1">
@@ -118,7 +118,7 @@ export default async function DashboardPage() {
             <div className="grid gap-8 px-6 py-8 sm:px-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] lg:px-10 lg:py-10">
               <div className="space-y-6">
                 <div className="flex flex-wrap items-center gap-3">
-                  <Badge className="rounded-full bg-foreground px-3 py-1 text-[11px] tracking-[0.18em] text-background uppercase">
+                  <Badge className="rounded-full bg-foreground px-3 py-1 text-[11px] tracking-[0.08em] text-background uppercase">
                     Main Home
                   </Badge>
                   <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
@@ -249,7 +249,7 @@ export default async function DashboardPage() {
             <Card className="border border-border/80 bg-card/95 shadow-sm">
               <CardHeader className="gap-3 border-b border-border/70 pb-5">
                 <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px] tracking-[0.18em] uppercase">
+                  <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px] tracking-[0.08em] uppercase">
                     Workflow Help
                   </Badge>
                   <Sparkles className="size-4 text-muted-foreground" />
@@ -363,7 +363,7 @@ function ActionCard({
     <Card className="border border-border/80 bg-card/95 shadow-sm">
       <CardHeader className="gap-3 pb-2">
         <div className="flex items-center justify-between gap-4">
-          <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px] tracking-[0.18em] uppercase">
+          <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px] tracking-[0.08em] uppercase">
             {eyebrow}
           </Badge>
           <div className="rounded-2xl border border-border/80 bg-muted/50 p-2">
@@ -437,7 +437,7 @@ function WorkflowStep({
 }) {
   return (
     <div className="rounded-3xl border border-border/80 bg-background/80 p-5 shadow-sm">
-      <div className="text-xs font-semibold tracking-[0.24em] text-muted-foreground uppercase">{step}</div>
+      <div className="text-xs font-semibold tracking-[0.08em] text-muted-foreground uppercase">{step}</div>
       <div className="mt-4 space-y-3">
         <h3 className="text-lg font-semibold tracking-tight text-foreground">{title}</h3>
         <p className="text-sm leading-6 text-muted-foreground">{description}</p>

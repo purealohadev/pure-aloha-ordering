@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import PageShell from "@/components/PageShell";
@@ -15,8 +15,9 @@ type ApprovalOrder = {
 function getStatusStyle(status: string) {
   if (status === "approved") {
     return {
-      background: "#dcfce7",
-      color: "#166534",
+      background: "rgba(34, 197, 94, 0.12)",
+      color: "#4ade80",
+      border: "1px solid rgba(34, 197, 94, 0.35)",
       padding: "4px 8px",
       borderRadius: 999,
       fontSize: 12,
@@ -27,8 +28,9 @@ function getStatusStyle(status: string) {
 
   if (status === "rejected") {
     return {
-      background: "#fee2e2",
-      color: "#991b1b",
+      background: "rgba(239, 68, 68, 0.12)",
+      color: "#f87171",
+      border: "1px solid rgba(239, 68, 68, 0.35)",
       padding: "4px 8px",
       borderRadius: 999,
       fontSize: 12,
@@ -38,8 +40,9 @@ function getStatusStyle(status: string) {
   }
 
   return {
-    background: "#fef3c7",
-    color: "#92400e",
+    background: "rgba(234, 179, 8, 0.12)",
+    color: "#facc15",
+    border: "1px solid rgba(234, 179, 8, 0.35)",
     padding: "4px 8px",
     borderRadius: 999,
     fontSize: 12,
@@ -49,7 +52,7 @@ function getStatusStyle(status: string) {
 }
 
 export default function ApprovalsPage() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const [orders, setOrders] = useState<ApprovalOrder[]>([]);
   const [role, setRole] = useState("unknown");
@@ -58,9 +61,11 @@ export default function ApprovalsPage() {
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [statusFilter, setStatusFilter] = useState("submitted");
 
-  async function loadOrders() {
+  const loadOrders = useCallback(async (showLoading = true) => {
     setMessage("");
-    setLoading(true);
+    if (showLoading) {
+      setLoading(true);
+    }
 
     const {
       data: { user },
@@ -105,11 +110,13 @@ export default function ApprovalsPage() {
 
     setOrders(data ?? []);
     setLoading(false);
-  }
+  }, [statusFilter, supabase]);
 
   useEffect(() => {
-    loadOrders();
-  }, [statusFilter]);
+    queueMicrotask(() => {
+      void loadOrders(false);
+    });
+  }, [loadOrders]);
 
   function updateNote(orderId: string, value: string) {
     setNoteDrafts((prev) => ({
@@ -208,7 +215,9 @@ export default function ApprovalsPage() {
           style={{
             padding: 10,
             borderRadius: 10,
-            border: "1px solid #cbd5e1",
+            border: "1px solid #3f3f46",
+            background: "#18181b",
+            color: "#fff",
           }}
         >
           <option value="submitted">Submitted</option>
@@ -217,7 +226,7 @@ export default function ApprovalsPage() {
           <option value="all">All</option>
         </select>
 
-        <button onClick={loadOrders} style={secondaryBtn}>
+        <button onClick={() => void loadOrders()} style={secondaryBtn}>
           Refresh
         </button>
       </div>
@@ -228,9 +237,9 @@ export default function ApprovalsPage() {
             marginBottom: 18,
             padding: 12,
             borderRadius: 10,
-            background: "#eff6ff",
-            border: "1px solid #bfdbfe",
-            color: "#1d4ed8",
+            background: "rgba(59, 130, 246, 0.12)",
+            border: "1px solid rgba(59, 130, 246, 0.35)",
+            color: "#60a5fa",
           }}
         >
           {message}
@@ -244,9 +253,9 @@ export default function ApprovalsPage() {
           style={{
             padding: 12,
             borderRadius: 10,
-            background: "#fee2e2",
-            border: "1px solid #fecaca",
-            color: "#991b1b",
+            background: "rgba(239, 68, 68, 0.12)",
+            border: "1px solid rgba(239, 68, 68, 0.35)",
+            color: "#f87171",
           }}
         >
           You do not have access to approvals.
@@ -256,9 +265,9 @@ export default function ApprovalsPage() {
           style={{
             padding: 12,
             borderRadius: 10,
-            background: "#f8fafc",
-            border: "1px solid #e5e7eb",
-            color: "#475569",
+            background: "#18181b",
+            border: "1px solid #3f3f46",
+            color: "#a1a1aa",
           }}
         >
           No orders found for this filter.
@@ -268,12 +277,12 @@ export default function ApprovalsPage() {
           style={{
             marginTop: 8,
             overflowX: "auto",
-            border: "1px solid #e5e7eb",
+            border: "1px solid #3f3f46",
             borderRadius: 12,
           }}
         >
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
-            <thead style={{ background: "#f8fafc" }}>
+            <thead style={{ background: "#18181b" }}>
               <tr>
                 <th style={th}>Order ID</th>
                 <th style={th}>Created</th>
@@ -305,7 +314,9 @@ export default function ApprovalsPage() {
                         width: 220,
                         padding: 8,
                         borderRadius: 8,
-                        border: "1px solid #cbd5e1",
+                        border: "1px solid #3f3f46",
+                        background: "#18181b",
+                        color: "#fff",
                         resize: "vertical",
                       }}
                     />
@@ -345,27 +356,29 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
-        border: "1px solid #e5e7eb",
+        border: "1px solid #3f3f46",
         borderRadius: 14,
         padding: 18,
-        background: "#f8fafc",
+        background: "#18181b",
       }}
     >
-      <div style={{ color: "#64748b", fontSize: 14 }}>{label}</div>
-      <div style={{ fontSize: 30, fontWeight: 700, marginTop: 8 }}>{value}</div>
+      <div style={{ color: "#a1a1aa", fontSize: 14 }}>{label}</div>
+      <div style={{ color: "#fff", fontSize: 30, fontWeight: 700, marginTop: 8 }}>{value}</div>
     </div>
   );
 }
 
 const th = {
-  borderBottom: "1px solid #ddd",
+  borderBottom: "1px solid #3f3f46",
+  color: "#a1a1aa",
   textAlign: "left" as const,
   padding: "12px 10px",
   fontSize: 14,
 };
 
 const td = {
-  borderBottom: "1px solid #eee",
+  borderBottom: "1px solid #3f3f46",
+  color: "#e4e4e7",
   padding: "10px",
   fontSize: 14,
   verticalAlign: "top" as const,
@@ -374,9 +387,9 @@ const td = {
 const secondaryBtn = {
   padding: "10px 14px",
   borderRadius: 10,
-  border: "1px solid #cbd5e1",
-  background: "#fff",
-  color: "#0f172a",
+  border: "1px solid #3f3f46",
+  background: "#18181b",
+  color: "#fff",
   cursor: "pointer",
 };
 
@@ -397,4 +410,3 @@ const rejectBtn = {
   color: "#fff",
   cursor: "pointer",
 };
-

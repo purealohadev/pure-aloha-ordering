@@ -86,14 +86,30 @@ function exportCsv(filename: string, rows: Record<string, unknown>[]) {
 
 function getStatusTone(status: OrderRow["status"]) {
   if (status === "Out") {
-    return "border-red-200 bg-red-50 text-red-700";
+    return "border-red-500/40 bg-red-500/10 text-red-400";
   }
 
   if (status === "Needs Reorder") {
-    return "border-amber-200 bg-amber-50 text-amber-700";
+    return "border-yellow-500/40 bg-yellow-500/10 text-yellow-400";
   }
 
-  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return "border-green-500/40 bg-green-500/10 text-green-400";
+}
+
+function getInventoryTextClass(onHand: number, par: number) {
+  if (onHand <= 0) {
+    return "text-red-400";
+  }
+
+  if (onHand < par) {
+    return "text-yellow-400";
+  }
+
+  if (onHand > par) {
+    return "text-green-400";
+  }
+
+  return "text-zinc-300";
 }
 
 export default function OrdersPage() {
@@ -401,45 +417,45 @@ export default function OrdersPage() {
   const isErrorMessage = message.startsWith("Error") || message === "Not logged in";
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(15,23,42,0.08),_transparent_34%),radial-gradient(circle_at_right,_rgba(180,83,9,0.08),_transparent_28%),linear-gradient(to_bottom,_rgba(248,250,252,0.98),_rgba(255,255,255,1))]">
+    <div className="min-h-screen bg-zinc-900 font-sans text-white">
       <NavBar />
 
       <main className="px-4 py-8 sm:px-6 lg:px-8">
         <div className="mx-auto flex max-w-7xl flex-col gap-6">
-          <section className="overflow-hidden rounded-[2rem] border border-border/80 bg-card/90 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.45)]">
+          <section className="overflow-hidden rounded-[2rem] border border-zinc-700 bg-zinc-800 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)]">
             <div className="grid gap-6 px-6 py-7 sm:px-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] lg:px-10">
               <div className="space-y-5">
                 <div className="flex flex-wrap items-center gap-3">
-                  <Badge className="rounded-full bg-foreground px-3 py-1 text-[11px] tracking-[0.18em] text-background uppercase">
+                  <Badge className="rounded-full bg-blue-500/15 px-3 py-1 text-[11px] tracking-[0.08em] text-blue-400 uppercase">
                     Orders
                   </Badge>
-                  <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
+                  <Badge variant="outline" className="rounded-full border-zinc-700 px-3 py-1 text-xs text-zinc-300">
                     Role: {role}
                   </Badge>
-                  <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
+                  <Badge variant="outline" className="rounded-full border-zinc-700 px-3 py-1 text-xs text-zinc-300">
                     Default: Compact View
                   </Badge>
                 </div>
 
                 <div className="space-y-3">
-                  <h1 className="text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
+                  <h1 className="font-sans text-4xl font-semibold tracking-tight text-blue-400 sm:text-5xl">
                     Faster ordering by brand
                   </h1>
-                  <p className="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
+                  <p className="max-w-3xl text-sm leading-6 text-zinc-400 sm:text-base">
                     Keep the default view dense for rapid scanning, expand the full page when
                     needed, or open a single product row without changing the current ordering flow.
                   </p>
                 </div>
 
                 <div className="flex flex-wrap gap-3">
-                  <Button size="lg" className="rounded-full px-5" onClick={createOrder}>
+                  <Button size="lg" className="rounded-full border border-zinc-700 bg-zinc-900 px-5 text-zinc-200 hover:bg-zinc-700 hover:text-white" onClick={createOrder}>
                     <ShoppingCart className="size-4" />
                     Create Order
                   </Button>
                   <Button
                     size="lg"
                     variant="outline"
-                    className="rounded-full px-5"
+                    className="rounded-full border-zinc-700 bg-zinc-900 px-5 text-zinc-200 hover:bg-zinc-700 hover:text-white"
                     onClick={submitLatestDraft}
                   >
                     <Send className="size-4" />
@@ -448,7 +464,7 @@ export default function OrdersPage() {
                   <Button
                     size="lg"
                     variant="outline"
-                    className="rounded-full px-5"
+                    className="rounded-full border-zinc-700 bg-zinc-900 px-5 text-zinc-200 hover:bg-zinc-700 hover:text-white"
                     onClick={exportAllOpenPO}
                   >
                     <Download className="size-4" />
@@ -469,19 +485,19 @@ export default function OrdersPage() {
           </section>
 
           <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(260px,0.75fr)]">
-            <Card className="border border-border/80 bg-card/95 shadow-sm">
-              <CardHeader className="gap-4 border-b border-border/70 pb-5">
+            <Card className="border border-zinc-700 bg-zinc-800 font-sans text-white shadow-sm">
+              <CardHeader className="gap-4 border-b border-zinc-700 pb-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   <div className="space-y-1">
-                    <CardTitle className="text-2xl font-semibold tracking-tight">
+                    <CardTitle className="font-sans text-2xl font-semibold tracking-tight text-blue-400">
                       Order Workspace
                     </CardTitle>
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-sm text-zinc-400">
                       Search, filter by vendor, and switch between compact and expanded defaults.
                     </p>
                   </div>
 
-                  <div className="inline-flex rounded-full border border-border bg-muted/50 p-1">
+                  <div className="inline-flex rounded-full border border-zinc-700 bg-zinc-900 p-1">
                     <ViewModeButton
                       active={viewMode === "compact"}
                       onClick={() => setViewMode("compact")}
@@ -502,7 +518,7 @@ export default function OrdersPage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="rounded-full"
+                    className="rounded-full border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
                     onClick={collapseAllBrands}
                     disabled={brandGroups.length === 0}
                   >
@@ -512,7 +528,7 @@ export default function OrdersPage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="rounded-full"
+                    className="rounded-full border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
                     onClick={expandAllBrands}
                     disabled={brandGroups.length === 0}
                   >
@@ -522,20 +538,20 @@ export default function OrdersPage() {
 
                 <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
                   <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-zinc-400" />
                     <Input
                       type="text"
                       value={search}
                       onChange={(event) => setSearch(event.target.value)}
                       placeholder="Search brand, product, SKU, category, or vendor"
-                      className="pl-9"
+                      className="border-zinc-700 bg-zinc-900 pl-9 font-sans text-white placeholder:text-zinc-500 focus-visible:border-zinc-500"
                     />
                   </div>
 
                   <select
                     value={vendorFilter}
                     onChange={(event) => setVendorFilter(event.target.value)}
-                    className="h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    className="h-10 rounded-lg border border-zinc-700 bg-zinc-900 px-3 font-sans text-sm text-white outline-none transition focus-visible:border-zinc-500 focus-visible:ring-3 focus-visible:ring-zinc-500/30"
                     aria-label="Filter by vendor"
                   >
                     {vendors.map((vendor) => (
@@ -545,12 +561,12 @@ export default function OrdersPage() {
                     ))}
                   </select>
 
-                  <label className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-muted/40 px-3 py-2 text-sm font-medium text-foreground">
+                  <label className="inline-flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-200">
                     <input
                       type="checkbox"
                       checked={showOnlyReorders}
                       onChange={(event) => setShowOnlyReorders(event.target.checked)}
-                      className="size-4 rounded border-input"
+                      className="size-4 rounded border-zinc-700 bg-zinc-900"
                     />
                     Show only reorder items
                   </label>
@@ -563,8 +579,8 @@ export default function OrdersPage() {
                     className={cn(
                       "rounded-2xl border px-4 py-3 text-sm",
                       isErrorMessage
-                        ? "border-red-200 bg-red-50 text-red-700"
-                        : "border-sky-200 bg-sky-50 text-sky-700"
+                        ? "border-red-500/40 bg-red-500/10 text-red-400"
+                        : "border-blue-500/40 bg-blue-500/10 text-blue-400"
                     )}
                   >
                     {message}
@@ -576,16 +592,16 @@ export default function OrdersPage() {
                     {Array.from({ length: 4 }).map((_, index) => (
                       <div
                         key={index}
-                        className="h-28 animate-pulse rounded-2xl border border-border/70 bg-muted/40"
+                        className="h-28 animate-pulse rounded-2xl border border-zinc-700 bg-zinc-800"
                       />
                     ))}
                   </div>
                 ) : brandGroups.length === 0 ? (
-                  <div className="rounded-3xl border border-dashed border-border bg-muted/20 px-6 py-12 text-center">
-                    <h2 className="text-lg font-semibold text-foreground">
+                  <div className="rounded-3xl border border-dashed border-zinc-700 bg-zinc-800 px-6 py-12 text-center">
+                    <h2 className="text-lg font-semibold text-white">
                       No products match these filters.
                     </h2>
-                    <p className="mt-2 text-sm text-muted-foreground">
+                    <p className="mt-2 text-sm text-zinc-400">
                       Adjust the search, vendor filter, or reorder-only toggle to see more products.
                     </p>
                   </div>
@@ -599,16 +615,16 @@ export default function OrdersPage() {
                       return (
                         <section
                           key={brand}
-                          className="mt-2 overflow-hidden rounded-2xl border border-border/80 bg-white/95 shadow-sm first:mt-0"
+                          className="mt-2 overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-800 shadow-sm first:mt-0"
                         >
                           <button
                             type="button"
                             onClick={() => toggleBrand(brand)}
-                            className="flex w-full items-center justify-between gap-3 border-b border-border/70 bg-[linear-gradient(135deg,rgba(148,163,184,0.16),rgba(226,232,240,0.72))] px-4 py-3 text-left transition hover:bg-[linear-gradient(135deg,rgba(148,163,184,0.22),rgba(226,232,240,0.9))] sm:px-5"
+                            className="flex w-full items-center justify-between gap-3 border-b border-zinc-700 bg-zinc-800 px-4 py-3 text-left transition hover:bg-zinc-700 sm:px-5"
                             aria-expanded={isBrandExpanded}
                           >
                             <div className="flex min-w-0 items-center gap-3">
-                              <span className="rounded-full border border-border/80 bg-white/90 p-2 text-foreground shadow-sm">
+                              <span className="rounded-full border border-zinc-700 bg-zinc-900 p-2 text-zinc-300 shadow-sm">
                                 {isBrandExpanded ? (
                                   <ChevronUp className="size-4" />
                                 ) : (
@@ -617,17 +633,17 @@ export default function OrdersPage() {
                               </span>
                               <div className="min-w-0 space-y-1.5">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <h2 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">
+                                  <h2 className="text-lg font-bold tracking-tight text-purple-400 sm:text-xl">
                                     {brand}
                                   </h2>
                                   <Badge
                                     variant="secondary"
-                                    className="rounded-full border border-border/70 bg-white/85 px-2.5 py-0.5 text-[11px] font-semibold text-foreground"
+                                    className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-300"
                                   >
                                     {brandRows.length} product{brandRows.length === 1 ? "" : "s"}
                                   </Badge>
                                 </div>
-                                <p className="text-sm text-muted-foreground">
+                                <p className="text-sm text-zinc-400">
                                   {reorderCount} reorder line{reorderCount === 1 ? "" : "s"} ready
                                   in this section
                                 </p>
@@ -635,13 +651,13 @@ export default function OrdersPage() {
                             </div>
 
                             <div className="flex flex-wrap items-center justify-end gap-2">
-                              <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+                              <Badge variant="secondary" className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-300">
                                 Brand Group
                               </Badge>
-                              <Badge variant="outline" className="rounded-full px-3 py-1">
+                              <Badge variant="outline" className="rounded-full border-zinc-700 px-3 py-1 text-zinc-300">
                                 {currencyFormatter.format(brandValue)}
                               </Badge>
-                              <span className="inline-flex min-w-28 items-center justify-end gap-2 rounded-full border border-border/70 bg-white/80 px-3 py-1 text-right text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                              <span className="inline-flex min-w-28 items-center justify-end gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-right text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
                                 {isBrandExpanded ? "Collapse" : "Expand"}
                                 {isBrandExpanded ? (
                                   <ChevronUp className="size-3.5" />
@@ -657,7 +673,7 @@ export default function OrdersPage() {
                               className={cn(
                                 viewMode === "compact"
                                   ? "grid gap-2 p-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
-                                  : "divide-y divide-border/70"
+                                  : "divide-y divide-zinc-700"
                               )}
                             >
                               {brandRows.map((row) => {
@@ -665,21 +681,22 @@ export default function OrdersPage() {
                                 const needsReorderHighlight = row.onHand < row.par;
 
                                 if (!rowExpanded) {
+                                  const inventoryTone = getInventoryTextClass(row.onHand, row.par);
+
                                   return (
                                     <article
                                       key={row.id}
                                       className={cn(
-                                        "h-[80px] rounded-lg border border-border/70 bg-background p-2 shadow-sm",
-                                        needsReorderHighlight && "bg-amber-50/25"
+                                        "h-[80px] rounded-lg border border-zinc-700 bg-zinc-800 p-2 font-sans shadow-sm transition hover:bg-zinc-700"
                                       )}
                                     >
                                       <div className="flex h-full min-h-0 flex-col justify-between gap-1">
                                         <div className="flex min-w-0 items-start justify-between gap-1.5">
                                           <div className="min-w-0 flex-1">
-                                            <div className="overflow-hidden text-sm font-medium leading-4 text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+                                            <div className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
                                               {row.product_name}
                                             </div>
-                                            <div className="truncate text-xs leading-3 text-muted-foreground">
+                                            <div className="truncate text-[11px] leading-tight text-zinc-400">
                                               {[row.brand_name, row.category].filter(Boolean).join(" · ")}
                                             </div>
                                           </div>
@@ -687,7 +704,7 @@ export default function OrdersPage() {
                                           <button
                                             type="button"
                                             onClick={() => toggleRowExpansion(row.id)}
-                                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-600 hover:text-white"
                                             aria-expanded={rowExpanded}
                                             aria-label={`Expand details for ${row.product_name}`}
                                           >
@@ -695,9 +712,9 @@ export default function OrdersPage() {
                                           </button>
                                         </div>
 
-                                        <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-3 text-muted-foreground">
+                                        <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-tight text-zinc-400">
                                           <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
-                                            <span>Inv {row.onHand}</span>
+                                            <span className={inventoryTone}>Inv {row.onHand}</span>
                                             <span aria-hidden="true">·</span>
                                             <span>Par {row.par}</span>
                                           </div>
@@ -724,29 +741,26 @@ export default function OrdersPage() {
                                   >
                                     <div
                                       className={cn(
-                                        "rounded-[1.4rem] border bg-background/95 p-4 shadow-sm",
-                                        needsReorderHighlight
-                                          ? "border-amber-200/80 bg-amber-50/25"
-                                          : "border-border/80"
+                                        "rounded-[1.4rem] border border-zinc-700 bg-zinc-800 p-4 shadow-sm"
                                       )}
                                     >
                                       <div className="flex flex-col gap-4">
                                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                                           <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
-                                              <h3 className="truncate text-base font-semibold tracking-tight text-foreground sm:text-lg">
+                                              <h3 className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
                                                 {row.product_name}
                                               </h3>
                                               {needsReorderHighlight ? (
                                                 <Badge
                                                   variant="outline"
-                                                  className="rounded-full border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700"
+                                                  className="rounded-full border-yellow-500/40 bg-yellow-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-yellow-400"
                                                 >
                                                   Low
                                                 </Badge>
                                               ) : null}
                                             </div>
-                                            <p className="mt-1 text-sm text-muted-foreground">
+                                            <p className="mt-1 text-xs leading-tight text-zinc-400">
                                               {row.brand_name}
                                             </p>
                                           </div>
@@ -754,7 +768,7 @@ export default function OrdersPage() {
                                           <button
                                             type="button"
                                             onClick={() => toggleRowExpansion(row.id)}
-                                            className="inline-flex items-center gap-2 self-start rounded-full border border-border/80 bg-muted/20 px-3 py-2 text-sm font-medium text-foreground transition hover:bg-muted/40"
+                                            className="inline-flex items-center gap-2 self-start rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-700 hover:text-white"
                                             aria-expanded={rowExpanded}
                                             aria-label={`${rowExpanded ? "Collapse" : "Expand"} details for ${row.product_name}`}
                                           >
@@ -768,18 +782,22 @@ export default function OrdersPage() {
                                         </div>
 
                                         <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_150px_150px_auto]">
-                                          <RowMetric label="Current Inventory" value={String(row.onHand)} />
+                                          <RowMetric
+                                            label="Current Inventory"
+                                            value={String(row.onHand)}
+                                            valueClassName={getInventoryTextClass(row.onHand, row.par)}
+                                          />
                                           <RowMetric label="Par Level" value={String(row.par)} />
-                                          <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-3">
-                                            <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                                          <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3">
+                                            <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
                                               Order Quantity
                                             </div>
-                                            <div className="mt-2 text-lg font-semibold tracking-tight text-foreground">
+                                            <div className="mt-2 text-lg font-semibold tracking-tight text-white">
                                               {row.suggested}
                                             </div>
                                           </div>
-                                          <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-3">
-                                            <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                                          <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3">
+                                            <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
                                               Adjust Order
                                             </div>
                                             <div className="mt-2">
@@ -794,7 +812,7 @@ export default function OrdersPage() {
                                         </div>
 
                                         {rowExpanded ? (
-                                          <div className="rounded-[1.3rem] border border-border/80 bg-muted/20 p-4 sm:p-5">
+                                          <div className="rounded-[1.3rem] border border-zinc-700 bg-zinc-900 p-4 sm:p-5">
                                             <div className="mb-4 flex flex-wrap items-center gap-2">
                                               <Badge
                                                 variant="outline"
@@ -805,7 +823,7 @@ export default function OrdersPage() {
                                               >
                                                 {row.status}
                                               </Badge>
-                                              <Badge variant="outline" className="rounded-full px-3 py-1">
+                                              <Badge variant="outline" className="rounded-full border-zinc-700 px-3 py-1 text-zinc-300">
                                                 {currencyFormatter.format(row.lineTotal)} line total
                                               </Badge>
                                             </div>
@@ -822,10 +840,11 @@ export default function OrdersPage() {
                                               <DetailItem
                                                 label="Current Inventory"
                                                 value={String(row.onHand)}
+                                                valueClassName={getInventoryTextClass(row.onHand, row.par)}
                                               />
                                               <DetailItem label="Par Level" value={String(row.par)} />
-                                              <div className="rounded-2xl border border-border/80 bg-background px-4 py-3 md:col-span-2 xl:col-span-2">
-                                                <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                                              <div className="rounded-2xl border border-zinc-700 bg-zinc-800 px-4 py-3 md:col-span-2 xl:col-span-2">
+                                                <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
                                                   Order Quantity Controls
                                                 </div>
                                                 <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -842,7 +861,7 @@ export default function OrdersPage() {
                                                     onChange={(event) =>
                                                       updateSuggested(row.id, event.target.value)
                                                     }
-                                                    className="w-full sm:w-28"
+                                                    className="w-full border-zinc-700 bg-zinc-900 font-sans text-white focus-visible:border-zinc-500 sm:w-28"
                                                     aria-label={`Order quantity input for ${row.product_name}`}
                                                   />
                                                 </div>
@@ -866,9 +885,9 @@ export default function OrdersPage() {
             </Card>
 
             <div className="space-y-4">
-              <Card className="border border-border/80 bg-card/95 shadow-sm">
-                <CardHeader className="gap-2 border-b border-border/70 pb-4">
-                  <CardTitle className="text-xl font-semibold tracking-tight">
+              <Card className="border border-zinc-700 bg-zinc-800 font-sans text-white shadow-sm">
+                <CardHeader className="gap-2 border-b border-zinc-700 pb-4">
+                  <CardTitle className="font-sans text-xl font-semibold tracking-tight text-blue-400">
                     Ordering Summary
                   </CardTitle>
                 </CardHeader>
@@ -882,9 +901,9 @@ export default function OrdersPage() {
                 </CardContent>
               </Card>
 
-              <Card className="border border-border/80 bg-card/95 shadow-sm">
-                <CardHeader className="gap-2 border-b border-border/70 pb-4">
-                  <CardTitle className="text-xl font-semibold tracking-tight">
+              <Card className="border border-zinc-700 bg-zinc-800 font-sans text-white shadow-sm">
+                <CardHeader className="gap-2 border-b border-zinc-700 pb-4">
+                  <CardTitle className="font-sans text-xl font-semibold tracking-tight text-blue-400">
                     Export by Vendor
                   </CardTitle>
                 </CardHeader>
@@ -897,7 +916,7 @@ export default function OrdersPage() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="rounded-full"
+                        className="rounded-full border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
                         onClick={() => exportVendorPO(vendor)}
                       >
                         <Download className="size-3.5" />
@@ -929,7 +948,7 @@ function ViewModeButton({
       onClick={onClick}
       className={cn(
         "rounded-full px-4 py-2 text-sm font-medium transition",
-        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+        active ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
       )}
     >
       {children}
@@ -939,33 +958,51 @@ function ViewModeButton({
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-4">
-      <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+    <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-4">
+      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
         {label}
       </div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight text-foreground">{value}</div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-white">{value}</div>
     </div>
   );
 }
 
-function RowMetric({ label, value }: { label: string; value: string }) {
+function RowMetric({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
   return (
-    <div className="rounded-2xl border border-border/80 bg-muted/20 px-4 py-3">
-      <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+    <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3">
+      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
         {label}
       </div>
-      <div className="mt-2 text-lg font-semibold tracking-tight text-foreground">{value}</div>
+      <div className={cn("mt-2 text-lg font-semibold tracking-tight text-white", valueClassName)}>
+        {value}
+      </div>
     </div>
   );
 }
 
-function DetailItem({ label, value }: { label: string; value: string }) {
+function DetailItem({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
   return (
-    <div className="rounded-2xl border border-border/80 bg-background px-4 py-3">
-      <div className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+    <div className="rounded-2xl border border-zinc-700 bg-zinc-800 px-4 py-3">
+      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
         {label}
       </div>
-      <div className="mt-1 text-sm font-medium text-foreground">{value}</div>
+      <div className={cn("mt-1 text-sm font-medium text-white", valueClassName)}>{value}</div>
     </div>
   );
 }
@@ -982,20 +1019,20 @@ function QuantityStepper({
   value: number;
 }) {
   return (
-    <div className="inline-flex items-center rounded-full border border-border bg-background p-1">
+    <div className="inline-flex items-center rounded-full border border-zinc-700 bg-zinc-900 p-1">
       <button
         type="button"
         onClick={onDecrease}
-        className="inline-flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        className="inline-flex size-8 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
         aria-label={`Decrease order quantity for ${productName}`}
       >
         <Minus className="size-4" />
       </button>
-      <span className="min-w-12 text-center text-base font-semibold text-foreground">{value}</span>
+      <span className="min-w-12 text-center text-base font-semibold text-white">{value}</span>
       <button
         type="button"
         onClick={onIncrease}
-        className="inline-flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        className="inline-flex size-8 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
         aria-label={`Increase order quantity for ${productName}`}
       >
         <Plus className="size-4" />
@@ -1016,11 +1053,11 @@ function CompactQuantityStepper({
   value: number;
 }) {
   return (
-    <span className="inline-flex items-center gap-1 align-middle text-foreground">
+    <span className="inline-flex items-center gap-1 align-middle text-xs text-white">
       <button
         type="button"
         onClick={onDecrease}
-        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        className="inline-flex size-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
         aria-label={`Decrease order quantity for ${productName}`}
       >
         <Minus className="size-3" />
@@ -1029,7 +1066,7 @@ function CompactQuantityStepper({
       <button
         type="button"
         onClick={onIncrease}
-        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        className="inline-flex size-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
         aria-label={`Increase order quantity for ${productName}`}
       >
         <Plus className="size-3" />

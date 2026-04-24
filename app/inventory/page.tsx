@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server"
+import NavBar from "@/components/NavBar"
 import InventoryCards, { type InventoryItem } from "@/components/inventory/inventory-cards"
 
 export default async function InventoryPage() {
@@ -7,11 +8,11 @@ export default async function InventoryPage() {
   // 1. get products
   const { data: products, error: productError } = await supabase
     .from("products")
-    .select("id, product_name, brand_name, category, sku, current_price")
+    .select("id, product_name, brand_name, category, distro, sku, current_price")
     .order("product_name", { ascending: true })
 
   if (productError) {
-    return <div className="p-6 text-red-600">{productError.message}</div>
+    return <div className="min-h-screen bg-zinc-900 p-6 text-red-400">{productError.message}</div>
   }
 
   // 2. get inventory
@@ -20,7 +21,7 @@ export default async function InventoryPage() {
     .select("product_id, on_hand, par_level")
 
   if (inventoryError) {
-    return <div className="p-6 text-red-600">{inventoryError.message}</div>
+    return <div className="min-h-screen bg-zinc-900 p-6 text-red-400">{inventoryError.message}</div>
   }
 
   // 3. map inventory by product_id
@@ -36,6 +37,7 @@ export default async function InventoryPage() {
       id: product.id,
       name: product.product_name,
       brand: product.brand_name,
+      distributor: product.distro,
       category: product.category,
       sku: product.sku,
       price: product.current_price,
@@ -46,16 +48,20 @@ export default async function InventoryPage() {
   })
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Inventory</h1>
-        <p className="text-muted-foreground">
-          Browse current products, inventory counts, and low-stock status in compact or expanded
-          views.
-        </p>
-      </div>
+    <div className="dark min-h-screen bg-zinc-900 font-sans text-white">
+      <NavBar />
 
-      <InventoryCards items={items} />
+      <main className="space-y-4 p-4 sm:p-6">
+        <div>
+          <h1 className="font-sans text-3xl font-bold tracking-tight text-blue-400">Inventory</h1>
+          <p className="font-sans text-zinc-400">
+            Browse current products, inventory counts, and low-stock status in compact or expanded
+            views.
+          </p>
+        </div>
+
+        <InventoryCards items={items} />
+      </main>
     </div>
   )
 }
