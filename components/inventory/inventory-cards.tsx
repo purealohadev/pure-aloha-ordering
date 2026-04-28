@@ -175,6 +175,29 @@ function getDisplayDistributorName(item: InventoryItem) {
   return BRAND_DISTRIBUTOR_FALLBACK.get(normalizeGroupKey(brandName)) ?? UNKNOWN_DISTRIBUTOR
 }
 
+function getCompactDisplayName(productName: string, brandName: string) {
+  const normalizedBrandName = brandName.trim()
+
+  if (!normalizedBrandName) {
+    return productName
+  }
+
+  const normalizedProductName = productName.trimStart()
+  const lowerProductName = normalizedProductName.toLowerCase()
+  const lowerBrandName = normalizedBrandName.toLowerCase()
+  const brandPrefixes = [
+    `${lowerBrandName} | `,
+    `${lowerBrandName} - `,
+    `${lowerBrandName} `,
+  ]
+
+  const matchedPrefix = brandPrefixes.find((prefix) => lowerProductName.startsWith(prefix))
+
+  return matchedPrefix
+    ? normalizedProductName.slice(matchedPrefix.length).trimStart()
+    : productName
+}
+
 function groupItemsByDistributorAndBrand(items: InventoryItem[]): DistributorGroup[] {
   const distributorMap = new Map<string, Map<string, InventoryItem[]>>()
 
@@ -261,7 +284,16 @@ export default function InventoryCards({ items }: Props) {
   const [stockFilter, setStockFilter] = useState<"all" | "in" | "low" | "out">("all")
   const [viewMode, setViewMode] = useState<ViewMode>("compact")
   const [collapsedDistributors, setCollapsedDistributors] = useState<Record<string, boolean>>({})
-  const [collapsedBrands, setCollapsedBrands] = useState<Record<string, boolean>>({})
+  const [collapsedBrands, setCollapsedBrands] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(
+      groupItemsByDistributorAndBrand(items).flatMap((distributorGroup) =>
+        distributorGroup.brands.map((brandGroup) => [
+          `${distributorGroup.name}::${brandGroup.name}`,
+          true,
+        ])
+      )
+    )
+  )
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({})
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [addingId, setAddingId] = useState<string | null>(null)
@@ -310,12 +342,105 @@ export default function InventoryCards({ items }: Props) {
     return groupItemsByDistributorAndBrand(filteredItems)
   }, [filteredItems])
 
+  function matchesStockFilter(item: InventoryItem, value: typeof stockFilter) {
+    const inventory = item.inventory ?? 0
+    const threshold = item.low_stock_threshold ?? 5
+    const isLow = inventory > 0 && inventory <= threshold
+    const isOut = inventory <= 0
+    const isIn = inventory > threshold
+
+    return (
+      value === "all" ||
+      (value === "in" && isIn) ||
+      (value === "low" && isLow) ||
+      (value === "out" && isOut)
+    )
+  }
+
+  function getBrandKeyForItem(item: InventoryItem) {
+    return `${getDisplayDistributorName(item)}::${displayGroupName(item.brand, UNKNOWN_BRAND)}`
+  }
+
+  function getMatchingBrandKeys({
+    queryValue = query,
+    categoryValue = category,
+    stockValue = stockFilter,
+  }: {
+    queryValue?: string
+    categoryValue?: string
+    stockValue?: typeof stockFilter
+  }) {
+    const q = queryValue.trim().toLowerCase()
+
+    return Array.from(
+      new Set(
+        items
+          .filter((item) => {
+            const matchesQuery =
+              q.length === 0 ||
+              item.name?.toLowerCase().includes(q) ||
+              item.brand?.toLowerCase().includes(q) ||
+              item.distributor?.toLowerCase().includes(q) ||
+              item.category?.toLowerCase().includes(q) ||
+              item.sku?.toLowerCase().includes(q)
+
+            const matchesCategory = categoryValue === "all" || item.category === categoryValue
+
+            return matchesQuery && matchesCategory && matchesStockFilter(item, stockValue)
+          })
+          .map(getBrandKeyForItem)
+      )
+    )
+  }
+
+  function expandBrandKeys(brandKeys: string[]) {
+    if (brandKeys.length === 0) return
+
+    setCollapsedBrands((prev) => ({
+      ...prev,
+      ...Object.fromEntries(brandKeys.map((key) => [key, false])),
+    }))
+  }
+
+  function expandBrandForItem(productId: string) {
+    const item = items.find((candidate) => candidate.id === productId)
+    if (item) {
+      expandBrandKeys([getBrandKeyForItem(item)])
+    }
+  }
+
+  function handleQueryChange(value: string) {
+    setQuery(value)
+    expandBrandKeys(getMatchingBrandKeys({ queryValue: value }))
+  }
+
+  function handleCategoryChange(value: string) {
+    setCategory(value)
+    expandBrandKeys(getMatchingBrandKeys({ categoryValue: value }))
+  }
+
+  function handleStockFilterChange(value: typeof stockFilter) {
+    setStockFilter(value)
+    expandBrandKeys(getMatchingBrandKeys({ stockValue: value }))
+  }
+
+  function handleExpandedView() {
+    setViewMode("expanded")
+    expandBrandKeys(
+      groupedItems.flatMap((distributorGroup) =>
+        distributorGroup.brands.map((brandGroup) => `${distributorGroup.name}::${brandGroup.name}`)
+      )
+    )
+  }
+
   function getQty(productId: string) {
     return quantities[productId] ?? 1
   }
 
   function setQty(productId: string, value: string) {
     const parsed = Number(value)
+
+    expandBrandForItem(productId)
     setQuantities((prev) => ({
       ...prev,
       [productId]: Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1,
@@ -345,7 +470,7 @@ export default function InventoryCards({ items }: Props) {
 
     setCollapsedBrands((prev) => ({
       ...prev,
-      [key]: !prev[key],
+      [key]: !(prev[key] ?? true),
     }))
   }
 
@@ -395,7 +520,7 @@ export default function InventoryCards({ items }: Props) {
     }
   }
 
-  function renderInventoryItem(item: InventoryItem) {
+  function renderInventoryItem(item: InventoryItem, brandName: string) {
     const inventory = item.inventory ?? 0
     const threshold = item.low_stock_threshold ?? 5
     const tone = stockTone(inventory, threshold)
@@ -413,10 +538,7 @@ export default function InventoryCards({ items }: Props) {
             <div className="flex min-w-0 items-start justify-between gap-1.5">
               <div className="min-w-0 flex-1">
                 <div className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
-                  {item.name}
-                </div>
-                <div className="truncate text-[11px] leading-tight text-zinc-400">
-                  {[item.brand || UNKNOWN_BRAND, item.category].filter(Boolean).join(" · ")}
+                  {getCompactDisplayName(item.name, brandName)}
                 </div>
               </div>
 
@@ -597,7 +719,7 @@ export default function InventoryCards({ items }: Props) {
               </ViewModeButton>
               <ViewModeButton
                 active={viewMode === "expanded"}
-                onClick={() => setViewMode("expanded")}
+                onClick={handleExpandedView}
               >
                 Expanded View
               </ViewModeButton>
@@ -609,7 +731,7 @@ export default function InventoryCards({ items }: Props) {
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
               <Input
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => handleQueryChange(event.target.value)}
                 placeholder="Search name, distributor, brand, category, or SKU"
                 className="border-zinc-700 bg-zinc-900 pl-9 font-sans text-white placeholder:text-zinc-500 focus-visible:border-zinc-500"
               />
@@ -622,7 +744,7 @@ export default function InventoryCards({ items }: Props) {
                   type="button"
                   variant={category === value ? "default" : "outline"}
                   size="sm"
-                  onClick={() => setCategory(value)}
+                  onClick={() => handleCategoryChange(value)}
                   className={cn(
                     "rounded-full border-zinc-700",
                     category === value
@@ -641,7 +763,7 @@ export default function InventoryCards({ items }: Props) {
               type="button"
               variant={stockFilter === "all" ? "default" : "outline"}
               size="sm"
-              onClick={() => setStockFilter("all")}
+              onClick={() => handleStockFilterChange("all")}
               className={cn(
                 "rounded-full border-zinc-700",
                 stockFilter === "all"
@@ -655,7 +777,7 @@ export default function InventoryCards({ items }: Props) {
               type="button"
               variant={stockFilter === "in" ? "default" : "outline"}
               size="sm"
-              onClick={() => setStockFilter("in")}
+              onClick={() => handleStockFilterChange("in")}
               className={cn(
                 "rounded-full border-zinc-700",
                 stockFilter === "in"
@@ -669,7 +791,7 @@ export default function InventoryCards({ items }: Props) {
               type="button"
               variant={stockFilter === "low" ? "default" : "outline"}
               size="sm"
-              onClick={() => setStockFilter("low")}
+              onClick={() => handleStockFilterChange("low")}
               className={cn(
                 "rounded-full border-zinc-700",
                 stockFilter === "low"
@@ -683,7 +805,7 @@ export default function InventoryCards({ items }: Props) {
               type="button"
               variant={stockFilter === "out" ? "default" : "outline"}
               size="sm"
-              onClick={() => setStockFilter("out")}
+              onClick={() => handleStockFilterChange("out")}
               className={cn(
                 "rounded-full border-zinc-700",
                 stockFilter === "out"
@@ -731,7 +853,7 @@ export default function InventoryCards({ items }: Props) {
                     <div className="space-y-3 p-3 sm:p-4">
                       {distributorGroup.brands.map((brandGroup) => {
                         const brandKey = `${distributorGroup.name}::${brandGroup.name}`
-                        const brandCollapsed = collapsedBrands[brandKey] ?? false
+                        const brandCollapsed = collapsedBrands[brandKey] ?? true
 
                         return (
                           <section
@@ -768,7 +890,7 @@ export default function InventoryCards({ items }: Props) {
                                     : "space-y-3"
                                 )}
                               >
-                                {brandGroup.items.map((item) => renderInventoryItem(item))}
+                                {brandGroup.items.map((item) => renderInventoryItem(item, brandGroup.name))}
                               </div>
                             ) : null}
                           </section>

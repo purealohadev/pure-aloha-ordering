@@ -112,6 +112,29 @@ function getInventoryTextClass(onHand: number, par: number) {
   return "text-zinc-300";
 }
 
+function getCompactDisplayName(productName: string, brandName: string) {
+  const normalizedBrandName = brandName.trim();
+
+  if (!normalizedBrandName) {
+    return productName;
+  }
+
+  const normalizedProductName = productName.trimStart();
+  const lowerProductName = normalizedProductName.toLowerCase();
+  const lowerBrandName = normalizedBrandName.toLowerCase();
+  const brandPrefixes = [
+    `${lowerBrandName} | `,
+    `${lowerBrandName} - `,
+    `${lowerBrandName} `,
+  ];
+
+  const matchedPrefix = brandPrefixes.find((prefix) => lowerProductName.startsWith(prefix));
+
+  return matchedPrefix
+    ? normalizedProductName.slice(matchedPrefix.length).trimStart()
+    : productName;
+}
+
 export default function OrdersPage() {
   const [supabase] = useState(() => createClient());
   const [rows, setRows] = useState<OrderRow[]>([]);
@@ -206,6 +229,11 @@ export default function OrdersPage() {
         });
 
       setRows(mapped);
+      setCollapsedBrands(
+        Object.fromEntries(
+          Array.from(new Set(mapped.map((row) => row.brand_name))).map((brand) => [brand, true])
+        )
+      );
       setLoading(false);
     }
 
@@ -249,9 +277,76 @@ export default function OrdersPage() {
   const totalOrderUnits = filteredRows.reduce((sum, row) => sum + row.suggested, 0);
   const activeOrderLines = filteredRows.filter((row) => row.suggested > 0).length;
 
+  function getMatchingBrands({
+    searchValue = search,
+    vendorValue = vendorFilter,
+    reorderOnly = showOnlyReorders,
+  }: {
+    searchValue?: string;
+    vendorValue?: string;
+    reorderOnly?: boolean;
+  }) {
+    const normalizedSearch = searchValue.trim().toLowerCase();
+
+    return Array.from(
+      new Set(
+        rows
+          .filter((row) => {
+            const matchesReorder = reorderOnly ? row.suggested > 0 : true;
+            const matchesSearch =
+              normalizedSearch.length === 0 ||
+              `${row.brand_name} ${row.product_name} ${row.category ?? ""} ${row.vendor} ${row.sku ?? ""}`
+                .toLowerCase()
+                .includes(normalizedSearch);
+            const matchesVendor = vendorValue === "All" ? true : row.vendor === vendorValue;
+
+            return matchesReorder && matchesSearch && matchesVendor;
+          })
+          .map((row) => row.brand_name)
+      )
+    );
+  }
+
+  function expandBrands(brands: string[]) {
+    if (brands.length === 0) return;
+
+    setCollapsedBrands((prev) => ({
+      ...prev,
+      ...Object.fromEntries(brands.map((brand) => [brand, false])),
+    }));
+  }
+
+  function expandBrandForRow(id: string) {
+    const row = rows.find((item) => item.id === id);
+    if (row) {
+      expandBrands([row.brand_name]);
+    }
+  }
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    expandBrands(getMatchingBrands({ searchValue: value }));
+  }
+
+  function handleVendorFilterChange(value: string) {
+    setVendorFilter(value);
+    expandBrands(getMatchingBrands({ vendorValue: value }));
+  }
+
+  function handleShowOnlyReordersChange(value: boolean) {
+    setShowOnlyReorders(value);
+    expandBrands(getMatchingBrands({ reorderOnly: value }));
+  }
+
+  function handleExpandedView() {
+    setViewMode("expanded");
+    expandAllBrands();
+  }
+
   function updateSuggested(id: string, value: number | string) {
     const qty = Math.max(0, Number(value) || 0);
 
+    expandBrandForRow(id);
     setRows((prev) =>
       prev.map((row) =>
         row.id === id
@@ -266,6 +361,7 @@ export default function OrdersPage() {
   }
 
   function adjustSuggested(id: string, delta: number) {
+    expandBrandForRow(id);
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== id) return row;
@@ -293,7 +389,7 @@ export default function OrdersPage() {
 
   function toggleBrand(brand: string) {
     setCollapsedBrands((prev) => {
-      const isCollapsed = prev[brand] ?? false;
+      const isCollapsed = prev[brand] ?? true;
       return {
         ...prev,
         [brand]: !isCollapsed,
@@ -506,7 +602,7 @@ export default function OrdersPage() {
                     </ViewModeButton>
                     <ViewModeButton
                       active={viewMode === "expanded"}
-                      onClick={() => setViewMode("expanded")}
+                      onClick={handleExpandedView}
                     >
                       Expanded View
                     </ViewModeButton>
@@ -542,7 +638,7 @@ export default function OrdersPage() {
                     <Input
                       type="text"
                       value={search}
-                      onChange={(event) => setSearch(event.target.value)}
+                      onChange={(event) => handleSearchChange(event.target.value)}
                       placeholder="Search brand, product, SKU, category, or vendor"
                       className="border-zinc-700 bg-zinc-900 pl-9 font-sans text-white placeholder:text-zinc-500 focus-visible:border-zinc-500"
                     />
@@ -550,7 +646,7 @@ export default function OrdersPage() {
 
                   <select
                     value={vendorFilter}
-                    onChange={(event) => setVendorFilter(event.target.value)}
+                    onChange={(event) => handleVendorFilterChange(event.target.value)}
                     className="h-10 rounded-lg border border-zinc-700 bg-zinc-900 px-3 font-sans text-sm text-white outline-none transition focus-visible:border-zinc-500 focus-visible:ring-3 focus-visible:ring-zinc-500/30"
                     aria-label="Filter by vendor"
                   >
@@ -565,7 +661,7 @@ export default function OrdersPage() {
                     <input
                       type="checkbox"
                       checked={showOnlyReorders}
-                      onChange={(event) => setShowOnlyReorders(event.target.checked)}
+                      onChange={(event) => handleShowOnlyReordersChange(event.target.checked)}
                       className="size-4 rounded border-zinc-700 bg-zinc-900"
                     />
                     Show only reorder items
@@ -608,7 +704,7 @@ export default function OrdersPage() {
                 ) : (
                   <div className="space-y-4">
                     {brandGroups.map(([brand, brandRows]) => {
-                      const isBrandExpanded = !(collapsedBrands[brand] ?? false);
+                      const isBrandExpanded = !(collapsedBrands[brand] ?? true);
                       const brandValue = brandRows.reduce((sum, row) => sum + row.lineTotal, 0);
                       const reorderCount = brandRows.filter((row) => row.suggested > 0).length;
 
@@ -694,10 +790,7 @@ export default function OrdersPage() {
                                         <div className="flex min-w-0 items-start justify-between gap-1.5">
                                           <div className="min-w-0 flex-1">
                                             <div className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
-                                              {row.product_name}
-                                            </div>
-                                            <div className="truncate text-[11px] leading-tight text-zinc-400">
-                                              {[row.brand_name, row.category].filter(Boolean).join(" · ")}
+                                              {getCompactDisplayName(row.product_name, brand)}
                                             </div>
                                           </div>
 
