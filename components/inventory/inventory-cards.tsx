@@ -83,7 +83,17 @@ const DISTRIBUTOR_OPTIONS = [
 ]
 const SUMMARY_DISTRIBUTORS = DISTRIBUTOR_OPTIONS
 const UNKNOWN_BRAND = "Unknown Brand"
-const PRODUCT_TYPE_ORDER = ["Badder", "Sauce & Diamonds", "Live Resin", "Rosin", "Edibles", "Other"]
+const INFUSED_BEVERAGES_TYPE = "INFUSED BEVERAGES"
+const INFUSED_BEVERAGES_FILTER = "Infused Beverages"
+const PRODUCT_TYPE_ORDER = [
+  INFUSED_BEVERAGES_TYPE,
+  "Edibles",
+  "Badder",
+  "Sauce & Diamonds",
+  "Live Resin",
+  "Rosin",
+  "Other",
+]
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -104,6 +114,32 @@ function getSummaryDistributorName(distributorName: string) {
   return SUMMARY_DISTRIBUTORS.includes(distributorName)
     ? distributorName
     : "Other"
+}
+
+function getCategoryFilterLabel(value: string) {
+  if (value === "all") {
+    return "All categories"
+  }
+
+  if (value === INFUSED_BEVERAGES_TYPE) {
+    return INFUSED_BEVERAGES_FILTER
+  }
+
+  return value
+}
+
+function itemMatchesCategoryFilter(item: InventoryItem, categoryFilter: string) {
+  if (categoryFilter === "all") {
+    return true
+  }
+
+  const productType = getProductType(item.name, item.brand)
+
+  if (categoryFilter === INFUSED_BEVERAGES_TYPE) {
+    return productType === INFUSED_BEVERAGES_TYPE
+  }
+
+  return item.category === categoryFilter || productType === categoryFilter
 }
 
 function getInitialLockedBrands(items: InventoryItem[]) {
@@ -143,8 +179,29 @@ function getCompactDisplayName(productName: string, brandName: string) {
     : productName
 }
 
-function getProductType(productName: string) {
+function getProductType(productName: string, brandName: string | null | undefined) {
   const normalizedName = productName.toLowerCase()
+  const normalizedBrand = brandName?.trim().toLowerCase() ?? ""
+  const detectionText = `${normalizedName} ${normalizedBrand}`.trim()
+
+  if (normalizedBrand === "cann" || normalizedBrand === "lagunitas hi-fi sessions") {
+    return INFUSED_BEVERAGES_TYPE
+  }
+
+  if (
+    /\b(drink|drinks|beverage|beverages|soda|tonic|can|cans|elixir)\b/.test(detectionText) ||
+    /\bhi[-\s]?fi sessions?\b/.test(detectionText)
+  ) {
+    return INFUSED_BEVERAGES_TYPE
+  }
+
+  if (
+    /\b(gummy|gummies|edible|edibles|chocolate|cookie|cookies|candy|mints|tablet|tablets)\b/.test(
+      detectionText
+    )
+  ) {
+    return "Edibles"
+  }
 
   if (normalizedName.includes("badder")) {
     return "Badder"
@@ -162,14 +219,6 @@ function getProductType(productName: string) {
     return "Rosin"
   }
 
-  if (
-    /\b(gummy|gummies|edible|edibles|chocolate|cookie|cookies|candy|mints|tablet|tablets|drink|beverage|syrup)\b/.test(
-      normalizedName
-    )
-  ) {
-    return "Edibles"
-  }
-
   return "Other"
 }
 
@@ -177,7 +226,7 @@ function groupItemsByProductType(items: InventoryItem[]): ProductTypeGroup[] {
   const productTypeMap = new Map<string, InventoryItem[]>()
 
   for (const item of items) {
-    const productType = getProductType(item.name)
+    const productType = getProductType(item.name, item.brand)
     const productTypeItems = productTypeMap.get(productType) ?? []
 
     productTypeItems.push(item)
@@ -395,11 +444,20 @@ export default function InventoryCards({ items }: Props) {
   const supabase = useMemo(() => createClient(), [])
 
   const categories = useMemo(() => {
+    const savedCategories = Array.from(
+      new Set(items.map((item) => item.category).filter(Boolean) as string[])
+    )
+      .filter(
+        (savedCategory) =>
+          savedCategory !== INFUSED_BEVERAGES_TYPE &&
+          savedCategory !== INFUSED_BEVERAGES_FILTER
+      )
+      .sort()
+
     return [
       "all",
-      ...Array.from(
-        new Set(items.map((item) => item.category).filter(Boolean) as string[])
-      ).sort(),
+      INFUSED_BEVERAGES_TYPE,
+      ...savedCategories,
     ]
   }, [items])
 
@@ -425,7 +483,7 @@ export default function InventoryCards({ items }: Props) {
         item.category?.toLowerCase().includes(q) ||
         item.sku?.toLowerCase().includes(q)
 
-      const matchesCategory = category === "all" || item.category === category
+      const matchesCategory = itemMatchesCategoryFilter(item, category)
 
       const matchesStock =
         stockFilter === "all" ||
@@ -509,7 +567,7 @@ export default function InventoryCards({ items }: Props) {
               item.category?.toLowerCase().includes(q) ||
               item.sku?.toLowerCase().includes(q)
 
-            const matchesCategory = categoryValue === "all" || item.category === categoryValue
+            const matchesCategory = itemMatchesCategoryFilter(item, categoryValue)
 
             return matchesQuery && matchesCategory && matchesStockFilter(item, stockValue)
           })
@@ -1089,7 +1147,7 @@ export default function InventoryCards({ items }: Props) {
                       : "bg-background text-foreground hover:bg-muted hover:text-foreground"
                   )}
                 >
-                  {value === "all" ? "All categories" : value}
+                  {getCategoryFilterLabel(value)}
                 </Button>
               ))}
             </div>
