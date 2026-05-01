@@ -82,7 +82,11 @@ export default function NavBar() {
   const utilityLinks = [
     { href: "/order-history", label: "Order History" },
     ...(role === "manager" || role === "admin"
-      ? [{ href: "/approvals", label: "Approvals" }]
+      ? [
+          { href: "/approvals", label: "Approvals" },
+          { href: "/admin/vendors", label: "Vendors" },
+          { href: "/admin/credits-returns", label: "Credits & Returns" },
+        ]
       : []),
   ];
 

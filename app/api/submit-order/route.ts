@@ -1,53 +1,40 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const supabase = await createClient();
+    const body = await request.json();
+    const orderId = body.order_id;
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) throw new Error("Not logged in");
-
-    const { data: latestDraft, error: draftError } = await supabase
-      .from("purchase_orders")
-      .select("*")
-      .eq("created_by", user.id)
-      .eq("status", "draft")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    if (draftError || !latestDraft) {
-      throw new Error("No draft order found");
+    if (!orderId) {
+      return NextResponse.json(
+        { success: false, error: "Missing order ID." },
+        { status: 400 }
+      );
     }
 
-    const { error: updateError } = await supabase
+    const { error } = await supabase
       .from("purchase_orders")
-      .update({ status: "submitted" })
-      .eq("id", latestDraft.id);
+      .update({
+        status: "submitted",
+      })
+      .eq("id", orderId);
 
-    if (updateError) throw updateError;
+    if (error) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 500 }
+      );
+    }
 
-    const { error: historyError } = await supabase
-      .from("approval_history")
-      .insert({
-        purchase_order_id: latestDraft.id,
-        action: "submitted",
-        actor_id: user.id,
-        note: "Submitted for manager approval",
-      });
-
-    if (historyError) throw historyError;
-
-    return NextResponse.json({ success: true, order: latestDraft });
-  } catch (e: any) {
+    return NextResponse.json({
+      success: true,
+    });
+  } catch (error: any) {
     return NextResponse.json(
-      { success: false, error: e.message },
+      { success: false, error: error.message || "Unknown error." },
       { status: 500 }
     );
   }
 }
-

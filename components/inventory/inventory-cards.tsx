@@ -16,6 +16,10 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import {
+  DISTRIBUTOR_ORDER_INDEX,
+  getDisplayDistributorName,
+} from "@/lib/inventory/distributors"
 import { cn } from "@/lib/utils"
 
 export type InventoryItem = {
@@ -48,131 +52,16 @@ type DistributorGroup = {
   brands: BrandGroup[]
 }
 
-const ACCESSORIES_GROUP_NAME = "Accessories / Non-Consumables"
-const UNKNOWN_DISTRIBUTOR = "Unknown Distributor"
 const UNKNOWN_BRAND = "Unknown Brand"
-
-const DISTRIBUTOR_DISPLAY_ORDER = [
-  "KSS",
-  "Nabis",
-  "UpNorth",
-  "Big Oil",
-  "Other",
-  UNKNOWN_DISTRIBUTOR,
-  ACCESSORIES_GROUP_NAME,
-]
-
-const BRAND_DISTRIBUTOR_GROUPS = {
-  KSS: [
-    "Kiva",
-    "Lost Farm",
-    "Pacific Stone",
-    "Garden Society",
-    "Seed Junky",
-    "Uncle Arnie's",
-    "Arcata Fire",
-    "Nasha",
-    "CANN",
-    "The Tablet",
-    "Emerald Sky",
-    "Gelato",
-    "Keef",
-    "Level",
-    "Big Pete's",
-    "Autumn Brands",
-    "Pax Labs",
-    "The Pairist",
-    "CLSICS",
-    "El Blunto",
-    "PRESHA",
-    "Tiny Fires",
-    "Awesome Dope",
-    "Ultra",
-    "Northern Harvest",
-    "Saida",
-  ],
-  Nabis: [
-    "Auntie Aloha",
-    "Dompen",
-    "KOA",
-    "Delighted",
-    "Liquid Flower",
-    "Mary's Medicinals",
-    "Kikoko",
-    "Green Vibe",
-    "Moon Valley",
-    "OM",
-    "Raw Garden",
-    "Yummi Karma",
-    "Vet CBD",
-    "Statehouse",
-  ],
-  UpNorth: ["UpNorth", "Fig Farm", "Globs", "Daze Off"],
-  "Big Oil": ["Bear Labs", "WVY"],
-  Other: ["Boutiq", "Sherbinski"],
-} as const
-
-const BRAND_DISTRIBUTOR_FALLBACK = new Map<string, string>(
-  Object.entries(BRAND_DISTRIBUTOR_GROUPS).flatMap(([distributor, brands]) =>
-    brands.map((brand) => [normalizeGroupKey(brand), distributor])
-  )
-)
-
-const DISTRIBUTOR_ORDER_INDEX = new Map(
-  DISTRIBUTOR_DISPLAY_ORDER.map((name, index) => [name, index])
-)
-
-const NON_CONSUMABLE_CATEGORIES = new Set(
-  [
-    "Accessories",
-    "Batteries",
-    "Hardware",
-    "Glass",
-    "Dab Tool",
-    "Grinder",
-    "Pipe",
-    "Water Pipe",
-    "Torch",
-    "Rolling Papers",
-    "Trays",
-    "Merch",
-  ].map(normalizeGroupKey)
-)
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
 })
 
-function normalizeGroupKey(value: string) {
-  return value.trim().toLowerCase()
-}
-
 function displayGroupName(value: string | null | undefined, fallback: string) {
   const trimmed = value?.trim()
   return trimmed && trimmed.length > 0 ? trimmed : fallback
-}
-
-function isNonConsumable(item: InventoryItem) {
-  return item.category ? NON_CONSUMABLE_CATEGORIES.has(normalizeGroupKey(item.category)) : false
-}
-
-function getDisplayDistributorName(item: InventoryItem) {
-  if (isNonConsumable(item)) {
-    return ACCESSORIES_GROUP_NAME
-  }
-
-  const distributorName = item.distributor?.trim()
-  if (distributorName) {
-    return distributorName
-  }
-
-  const brandName = item.brand?.trim()
-  if (!brandName) {
-    return UNKNOWN_DISTRIBUTOR
-  }
-
-  return BRAND_DISTRIBUTOR_FALLBACK.get(normalizeGroupKey(brandName)) ?? UNKNOWN_DISTRIBUTOR
 }
 
 function getCompactDisplayName(productName: string, brandName: string) {

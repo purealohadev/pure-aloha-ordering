@@ -1,37 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  ChevronDown,
-  ChevronUp,
-  Download,
-  Minus,
-  Plus,
-  Search,
-  Send,
-  ShoppingCart,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Minus, Plus, ShoppingCart, Zap } from "lucide-react";
 import NavBar from "@/components/NavBar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import {
+  getDistributorFromBrand,
+  isNonConsumableCategory,
+} from "@/lib/inventory/distributors";
 import { createClient } from "@/lib/supabase/client";
-
-type ProductRow = {
-  id: string;
-  brand_name: string | null;
-  product_name: string;
-  sku: string | null;
-  category: string | null;
-  distro: string | null;
-  current_price: number | null;
-  inventory?: {
-    on_hand: number;
-    par_level: number;
-  }[];
-};
 
 type OrderRow = {
   id: string;
@@ -44,72 +22,77 @@ type OrderRow = {
   onHand: number;
   par: number;
   suggested: number;
+  orderQty: number;
   status: "Out" | "Needs Reorder" | "Healthy";
   lineTotal: number;
 };
 
-type ViewMode = "compact" | "expanded";
+type ProductInventory = {
+  on_hand: number | string | null;
+  par_level: number | string | null;
+};
+
+type ProductRecord = {
+  id: string;
+  brand_name: string | null;
+  product_name: string | null;
+  sku: string | null;
+  category: string | null;
+  distro: string | null;
+  current_price: number | string | null;
+  inventory: ProductInventory[] | null;
+};
+
+type CreditTransaction = {
+  id: string;
+  distributor: string | null;
+  vendor_name: string | null;
+  credit_type: string | null;
+  credit_amount: number | string | null;
+};
+
+type VendorCreditTotals = {
+  totalCredits: number;
+  totalReturns: number;
+  availableCredit: number;
+};
+
+type BrandOrderGroup = {
+  name: string;
+  items: OrderRow[];
+};
+
+type DistributorOrderGroup = {
+  name: string;
+  itemsCount: number;
+  brands: BrandOrderGroup[];
+};
+
+type OrderFilter = "all" | "needs" | "credit";
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
 });
 
-function exportCsv(filename: string, rows: Record<string, unknown>[]) {
-  if (!rows.length) return;
+function parseCreditAmount(value: number | string | null) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (value === null || value === undefined || value === "") return 0;
 
-  const headers = Object.keys(rows[0]);
-
-  const escapeCell = (value: unknown) => {
-    const str = String(value ?? "");
-    if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-      return `"${str.replace(/"/g, '""')}"`;
-    }
-    return str;
-  };
-
-  const csv = [
-    headers.join(","),
-    ...rows.map((row) => headers.map((header) => escapeCell(row[header])).join(",")),
-  ].join("\n");
-
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  const amount = Number(String(value).replace(/[$,]/g, "").trim());
+  return Number.isFinite(amount) ? amount : 0;
 }
 
-function getStatusTone(status: OrderRow["status"]) {
-  if (status === "Out") {
-    return "border-red-500/40 bg-red-500/10 text-red-400";
-  }
-
-  if (status === "Needs Reorder") {
-    return "border-yellow-500/40 bg-yellow-500/10 text-yellow-400";
-  }
-
-  return "border-green-500/40 bg-green-500/10 text-green-400";
+function formatCurrency(value: number | string | null) {
+  return currencyFormatter.format(parseCreditAmount(value));
 }
 
-function getInventoryTextClass(onHand: number, par: number) {
-  if (onHand <= 0) {
-    return "text-red-400";
-  }
+function creditKey(distributor: string, vendorName: string) {
+  return `${distributor}__${vendorName}`;
+}
 
-  if (onHand < par) {
-    return "text-yellow-400";
-  }
-
-  if (onHand > par) {
-    return "text-green-400";
-  }
-
-  return "text-zinc-300";
+function brandKey(distributor: string, brandName: string) {
+  return `${distributor}::${brandName}`;
 }
 
 function getCompactDisplayName(productName: string, brandName: string) {
@@ -135,45 +118,117 @@ function getCompactDisplayName(productName: string, brandName: string) {
     : productName;
 }
 
+function summarizeVendorTransactions(transactions: CreditTransaction[]): VendorCreditTotals {
+  return transactions.reduce(
+    (totals, transaction) => {
+      const type = (transaction.credit_type || "").trim().toLowerCase();
+      const amount = parseCreditAmount(transaction.credit_amount);
+
+      if (type === "credit") {
+        totals.totalCredits += amount;
+      }
+
+      if (type === "return") {
+        totals.totalReturns += amount;
+      }
+
+      totals.availableCredit = totals.totalCredits + totals.totalReturns;
+      return totals;
+    },
+    { totalCredits: 0, totalReturns: 0, availableCredit: 0 }
+  );
+}
+
+function groupCreditTotals(transactions: CreditTransaction[]) {
+  const distributorMap = new Map<string, Map<string, CreditTransaction[]>>();
+
+  for (const transaction of transactions) {
+    const distributor = transaction.distributor || "Unknown Distributor";
+    const vendorName = transaction.vendor_name || "Unknown Vendor";
+
+    if (!distributorMap.has(distributor)) {
+      distributorMap.set(distributor, new Map());
+    }
+
+    const vendorMap = distributorMap.get(distributor);
+    if (!vendorMap) continue;
+
+    if (!vendorMap.has(vendorName)) {
+      vendorMap.set(vendorName, []);
+    }
+
+    vendorMap.get(vendorName)?.push(transaction);
+  }
+
+  const totals = new Map<string, VendorCreditTotals>();
+
+  for (const [distributor, vendorMap] of distributorMap.entries()) {
+    for (const [vendorName, vendorTransactions] of vendorMap.entries()) {
+      totals.set(creditKey(distributor, vendorName), summarizeVendorTransactions(vendorTransactions));
+    }
+  }
+
+  return totals;
+}
+
+function groupRowsByDistributorAndBrand(
+  rows: OrderRow[],
+  creditTotals: Map<string, VendorCreditTotals>
+): DistributorOrderGroup[] {
+  const distributorMap = new Map<string, Map<string, OrderRow[]>>();
+
+  for (const row of rows) {
+    const brandMap = distributorMap.get(row.vendor) ?? new Map<string, OrderRow[]>();
+    const brandItems = brandMap.get(row.brand_name) ?? [];
+
+    brandItems.push(row);
+    brandMap.set(row.brand_name, brandItems);
+    distributorMap.set(row.vendor, brandMap);
+  }
+
+  return Array.from(distributorMap.entries())
+    .map(([name, brandMap]) => {
+      const brands = Array.from(brandMap.entries())
+        .map(([brandName, items]) => ({
+          name: brandName,
+          items: items.sort((a, b) => a.product_name.localeCompare(b.product_name)),
+        }))
+        .sort((a, b) => {
+          const aHasCredit = (creditTotals.get(creditKey(name, a.name))?.availableCredit ?? 0) > 0;
+          const bHasCredit = (creditTotals.get(creditKey(name, b.name))?.availableCredit ?? 0) > 0;
+
+          if (aHasCredit !== bHasCredit) return aHasCredit ? -1 : 1;
+
+          return a.name.localeCompare(b.name);
+        });
+
+      return {
+        name,
+        itemsCount: brands.reduce((total, brand) => total + brand.items.length, 0),
+        brands,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export default function OrdersPage() {
   const [supabase] = useState(() => createClient());
   const [rows, setRows] = useState<OrderRow[]>([]);
-  const [role, setRole] = useState("unknown");
+  const [creditTotals, setCreditTotals] = useState<Map<string, VendorCreditTotals>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
-  const [showOnlyReorders, setShowOnlyReorders] = useState(true);
   const [search, setSearch] = useState("");
-  const [vendorFilter, setVendorFilter] = useState("All");
-  const [viewMode, setViewMode] = useState<ViewMode>("compact");
+  const [orderFilter, setOrderFilter] = useState<OrderFilter>("all");
+  const [collapsedDistributors, setCollapsedDistributors] = useState<Record<string, boolean>>({});
   const [collapsedBrands, setCollapsedBrands] = useState<Record<string, boolean>>({});
-  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const [vendorNotes, setVendorNotes] = useState<Record<string, string>>({});
+  const [expandedVendorNotes, setExpandedVendorNotes] = useState<Record<string, boolean>>({});
+  const [draftOrderId, setDraftOrderId] = useState<string | null>(null);
+  const [orderStatus, setOrderStatus] = useState<"none" | "draft" | "submitted">("none");
 
   useEffect(() => {
     async function loadData() {
-      setLoading(true);
-      setMessage("");
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        setMessage("Not logged in");
-        setLoading(false);
-        return;
-      }
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .single();
-
-      setRole(profile?.role ?? "unknown");
-
-      const { data: products, error } = await supabase
-        .from("products")
-        .select(`
+      const [productsResult, creditTransactionsResult] = await Promise.all([
+        supabase.from("products").select(`
           id,
           brand_name,
           product_name,
@@ -181,58 +236,49 @@ export default function OrdersPage() {
           category,
           distro,
           current_price,
-          inventory (
-            on_hand,
-            par_level
-          )
-        `)
-        .order("brand_name", { ascending: true });
+          inventory (on_hand, par_level)
+        `),
+        supabase
+          .from("credit_transactions")
+          .select("id, distributor, vendor_name, credit_type, credit_amount")
+          .order("distributor", { ascending: true })
+          .order("vendor_name", { ascending: true }),
+      ]);
 
-      if (error) {
-        setMessage(error.message);
-        setLoading(false);
-        return;
-      }
-
-      const mapped = ((products as ProductRow[]) ?? [])
-        .map((row) => {
+      const mapped =
+        (productsResult.data as ProductRecord[] | null)?.filter(
+          (row) => !isNonConsumableCategory(row.category)
+        ).map((row) => {
           const inv = row.inventory?.[0];
           const onHand = Number(inv?.on_hand ?? 0);
           const par = Number(inv?.par_level ?? 0);
           const suggested = Math.max(par - onHand, 0);
-          const status =
-            onHand <= 0 && par > 0
-              ? "Out"
-              : onHand < par
-                ? "Needs Reorder"
-                : "Healthy";
+          const status: OrderRow["status"] =
+            onHand <= 0 ? "Out" : onHand < par ? "Needs Reorder" : "Healthy";
+          const brandName = row.brand_name || "Unknown";
+          const cleanBrand = row.brand_name?.toLowerCase().trim();
+          const distributor = getDistributorFromBrand(cleanBrand) ?? "Other";
 
           return {
             id: row.id,
-            brand_name: row.brand_name?.trim() || "Unknown Brand",
-            product_name: row.product_name,
+            brand_name: brandName,
+            product_name: row.product_name || "Unnamed Product",
             sku: row.sku,
             category: row.category,
-            vendor: row.distro?.trim() || "Other",
+            vendor: distributor,
             current_price: Number(row.current_price ?? 0),
             onHand,
             par,
             suggested,
+            orderQty: suggested,
             status,
             lineTotal: suggested * Number(row.current_price ?? 0),
-          } satisfies OrderRow;
-        })
-        .sort((a, b) => {
-          const brandCompare = a.brand_name.localeCompare(b.brand_name);
-          if (brandCompare !== 0) return brandCompare;
-          return a.product_name.localeCompare(b.product_name);
-        });
+          };
+        }) ?? [];
 
       setRows(mapped);
-      setCollapsedBrands(
-        Object.fromEntries(
-          Array.from(new Set(mapped.map((row) => row.brand_name))).map((brand) => [brand, true])
-        )
+      setCreditTotals(
+        groupCreditTotals((creditTransactionsResult.data as CreditTransaction[] | null) ?? [])
       );
       setLoading(false);
     }
@@ -240,188 +286,125 @@ export default function OrdersPage() {
     loadData();
   }, [supabase]);
 
-  const vendors = useMemo(() => {
-    return ["All", ...Array.from(new Set(rows.map((row) => row.vendor))).sort()];
-  }, [rows]);
+  const filtered = useMemo(() => {
+    return rows.filter((r) => {
+      const matchesSearch = `${r.brand_name} ${r.product_name} ${r.vendor} ${r.category ?? ""} ${r.sku ?? ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase());
 
-  const filteredRows = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
+      const availableCredit =
+        creditTotals.get(creditKey(r.vendor, r.brand_name))?.availableCredit ?? 0;
+      const matchesFilter =
+        orderFilter === "needs"
+          ? r.suggested > 0
+          : orderFilter === "credit"
+            ? availableCredit > 0
+            : true;
 
-    return rows.filter((row) => {
-      const matchesReorder = showOnlyReorders ? row.suggested > 0 : true;
-      const matchesSearch =
-        normalizedSearch.length === 0 ||
-        `${row.brand_name} ${row.product_name} ${row.category ?? ""} ${row.vendor} ${row.sku ?? ""}`
-          .toLowerCase()
-          .includes(normalizedSearch);
-      const matchesVendor = vendorFilter === "All" ? true : row.vendor === vendorFilter;
-
-      return matchesReorder && matchesSearch && matchesVendor;
+      return matchesSearch && matchesFilter;
     });
-  }, [rows, search, showOnlyReorders, vendorFilter]);
+  }, [creditTotals, orderFilter, rows, search]);
 
-  const brandGroups = useMemo(() => {
-    const groups = filteredRows.reduce<Record<string, OrderRow[]>>((acc, row) => {
-      if (!acc[row.brand_name]) {
-        acc[row.brand_name] = [];
-      }
+  const groupedRows = useMemo(
+    () => groupRowsByDistributorAndBrand(filtered, creditTotals),
+    [creditTotals, filtered]
+  );
 
-      acc[row.brand_name].push(row);
-      return acc;
-    }, {});
+  const selected = rows.filter((r) => r.orderQty > 0);
 
-    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
-  }, [filteredRows]);
+  const groupedByVendor = useMemo(() => {
+    const map: Record<string, Record<string, OrderRow[]>> = {};
 
-  const totalOrderValue = filteredRows.reduce((sum, row) => sum + row.lineTotal, 0);
-  const totalOrderUnits = filteredRows.reduce((sum, row) => sum + row.suggested, 0);
-  const activeOrderLines = filteredRows.filter((row) => row.suggested > 0).length;
+    selected.forEach((row) => {
+      if (!map[row.vendor]) map[row.vendor] = {};
+      if (!map[row.vendor][row.brand_name]) map[row.vendor][row.brand_name] = [];
+      map[row.vendor][row.brand_name].push(row);
+    });
 
-  function getMatchingBrands({
-    searchValue = search,
-    vendorValue = vendorFilter,
-    reorderOnly = showOnlyReorders,
-  }: {
-    searchValue?: string;
-    vendorValue?: string;
-    reorderOnly?: boolean;
-  }) {
-    const normalizedSearch = searchValue.trim().toLowerCase();
+    return map;
+  }, [selected]);
 
-    return Array.from(
-      new Set(
-        rows
-          .filter((row) => {
-            const matchesReorder = reorderOnly ? row.suggested > 0 : true;
-            const matchesSearch =
-              normalizedSearch.length === 0 ||
-              `${row.brand_name} ${row.product_name} ${row.category ?? ""} ${row.vendor} ${row.sku ?? ""}`
-                .toLowerCase()
-                .includes(normalizedSearch);
-            const matchesVendor = vendorValue === "All" ? true : row.vendor === vendorValue;
-
-            return matchesReorder && matchesSearch && matchesVendor;
-          })
-          .map((row) => row.brand_name)
-      )
-    );
+  function getAvailableCredit(distributor: string, vendorName: string) {
+    return creditTotals.get(creditKey(distributor, vendorName))?.availableCredit ?? 0;
   }
 
-  function expandBrands(brands: string[]) {
-    if (brands.length === 0) return;
-
-    setCollapsedBrands((prev) => ({
+  function toggleDistributor(distributor: string) {
+    setCollapsedDistributors((prev) => ({
       ...prev,
-      ...Object.fromEntries(brands.map((brand) => [brand, false])),
+      [distributor]: !prev[distributor],
     }));
   }
 
-  function expandBrandForRow(id: string) {
-    const row = rows.find((item) => item.id === id);
-    if (row) {
-      expandBrands([row.brand_name]);
-    }
+  function toggleBrand(distributor: string, brandName: string) {
+    const key = brandKey(distributor, brandName);
+
+    setCollapsedBrands((prev) => ({
+      ...prev,
+      [key]: !(prev[key] ?? true),
+    }));
   }
 
-  function handleSearchChange(value: string) {
-    setSearch(value);
-    expandBrands(getMatchingBrands({ searchValue: value }));
+  function toggleVendorNote(distributor: string, vendorName: string) {
+    const key = creditKey(distributor, vendorName);
+
+    setExpandedVendorNotes((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
   }
 
-  function handleVendorFilterChange(value: string) {
-    setVendorFilter(value);
-    expandBrands(getMatchingBrands({ vendorValue: value }));
+  function updateVendorNote(distributor: string, vendorName: string, note: string) {
+    const key = creditKey(distributor, vendorName);
+
+    setVendorNotes((prev) => ({
+      ...prev,
+      [key]: note,
+    }));
   }
 
-  function handleShowOnlyReordersChange(value: boolean) {
-    setShowOnlyReorders(value);
-    expandBrands(getMatchingBrands({ reorderOnly: value }));
-  }
+  function updateQty(id: string, qty: number) {
+    const safeQty = Math.max(0, Number(qty) || 0);
 
-  function handleExpandedView() {
-    setViewMode("expanded");
-    expandAllBrands();
-  }
-
-  function updateSuggested(id: string, value: number | string) {
-    const qty = Math.max(0, Number(value) || 0);
-
-    expandBrandForRow(id);
     setRows((prev) =>
-      prev.map((row) =>
-        row.id === id
+      prev.map((r) =>
+        r.id === id
           ? {
-              ...row,
-              suggested: qty,
-              lineTotal: qty * Number(row.current_price ?? 0),
+              ...r,
+              orderQty: safeQty,
+              lineTotal: safeQty * r.current_price,
             }
-          : row
+          : r
       )
     );
   }
 
-  function adjustSuggested(id: string, delta: number) {
-    expandBrandForRow(id);
+  function adjust(id: string, delta: number) {
     setRows((prev) =>
-      prev.map((row) => {
-        if (row.id !== id) return row;
+      prev.map((r) => {
+        if (r.id !== id) return r;
 
-        const suggested = Math.max(0, row.suggested + delta);
+        const next = Math.max(0, r.orderQty + delta);
+
         return {
-          ...row,
-          suggested,
-          lineTotal: suggested * Number(row.current_price ?? 0),
+          ...r,
+          orderQty: next,
+          lineTotal: next * r.current_price,
         };
       })
     );
   }
 
-  function isRowExpanded(id: string) {
-    return expandedRows[id] ?? viewMode === "expanded";
-  }
-
-  function toggleRowExpansion(id: string) {
-    setExpandedRows((prev) => ({
-      ...prev,
-      [id]: !isRowExpanded(id),
-    }));
-  }
-
-  function toggleBrand(brand: string) {
-    setCollapsedBrands((prev) => {
-      const isCollapsed = prev[brand] ?? true;
-      return {
-        ...prev,
-        [brand]: !isCollapsed,
-      };
-    });
-  }
-
-  function collapseAllBrands() {
-    setCollapsedBrands(
-      Object.fromEntries(brandGroups.map(([brand]) => [brand, true]))
-    );
-  }
-
-  function expandAllBrands() {
-    setCollapsedBrands(
-      Object.fromEntries(brandGroups.map(([brand]) => [brand, false]))
-    );
-  }
-
-  async function createOrder() {
-    setMessage("");
-
+  async function createDraft() {
     const lines = rows
-      .filter((row) => row.suggested > 0)
+      .filter((row) => row.orderQty > 0)
       .map((row) => ({
         product_id: row.id,
-        qty: row.suggested,
+        qty: row.orderQty,
         price: row.current_price,
       }));
 
     if (lines.length === 0) {
-      setMessage("No order quantities entered.");
+      alert("No order quantities entered.");
       return;
     }
 
@@ -435,735 +418,392 @@ export default function OrdersPage() {
 
     const data = await res.json();
 
-    if (data.success) {
-      setMessage("Order created successfully.");
-    } else {
-      setMessage(`Error: ${data.error}`);
+    if (!res.ok || !data.success) {
+      alert(data.error || "Could not create draft.");
+      return;
     }
+
+    setDraftOrderId(data.order_id);
+    setOrderStatus("draft");
+    alert("Draft order created.");
   }
 
-  async function submitLatestDraft() {
-    setMessage("");
+  async function submitForApproval() {
+    if (!draftOrderId) {
+      alert("Create a draft first.");
+      return;
+    }
 
     const res = await fetch("/api/submit-order", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
+      body: JSON.stringify({ order_id: draftOrderId }),
     });
 
     const data = await res.json();
 
-    if (data.success) {
-      setMessage("Latest draft submitted for approval.");
-    } else {
-      setMessage(`Error: ${data.error}`);
-    }
-  }
-
-  function exportAllOpenPO() {
-    const exportRows = filteredRows
-      .filter((row) => row.suggested > 0)
-      .map((row) => ({
-        distro: row.vendor,
-        brand_name: row.brand_name,
-        product_name: row.product_name,
-        category: row.category,
-        on_hand: row.onHand,
-        par_level: row.par,
-        order_qty: row.suggested,
-        unit_price: row.current_price,
-        line_total: row.lineTotal.toFixed(2),
-      }));
-
-    if (!exportRows.length) {
-      setMessage("No reorder lines to export.");
+    if (!res.ok || !data.success) {
+      alert(data.error || "Could not submit order.");
       return;
     }
 
-    exportCsv("all-open-purchase-orders.csv", exportRows);
-    setMessage("Exported all open purchase order lines.");
+    setOrderStatus("submitted");
+    alert("Order submitted for approval.");
   }
 
-  function exportVendorPO(vendor: string) {
-    const exportRows = filteredRows
-      .filter((row) => row.vendor === vendor && row.suggested > 0)
-      .map((row) => ({
-        distro: row.vendor,
-        brand_name: row.brand_name,
-        product_name: row.product_name,
-        category: row.category,
-        on_hand: row.onHand,
-        par_level: row.par,
-        order_qty: row.suggested,
-        unit_price: row.current_price,
-        line_total: row.lineTotal.toFixed(2),
-      }));
-
-    if (!exportRows.length) {
-      setMessage(`No reorder lines to export for ${vendor}.`);
-      return;
-    }
-
-    const safeName = vendor.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    exportCsv(`${safeName}-purchase-order.csv`, exportRows);
-    setMessage(`Exported purchase order for ${vendor}.`);
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-zinc-900 p-6 text-white">Loading...</div>
+    );
   }
-
-  const isErrorMessage = message.startsWith("Error") || message === "Not logged in";
 
   return (
-    <div className="min-h-screen bg-zinc-900 font-sans text-white">
+    <div className="min-h-screen bg-zinc-900 text-white">
       <NavBar />
 
-      <main className="px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mx-auto flex max-w-7xl flex-col gap-6">
-          <section className="overflow-hidden rounded-[2rem] border border-zinc-700 bg-zinc-800 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)]">
-            <div className="grid gap-6 px-6 py-7 sm:px-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] lg:px-10">
-              <div className="space-y-5">
-                <div className="flex flex-wrap items-center gap-3">
-                  <Badge className="rounded-full bg-blue-500/15 px-3 py-1 text-[11px] tracking-[0.08em] text-blue-400 uppercase">
-                    Orders
-                  </Badge>
-                  <Badge variant="outline" className="rounded-full border-zinc-700 px-3 py-1 text-xs text-zinc-300">
-                    Role: {role}
-                  </Badge>
-                  <Badge variant="outline" className="rounded-full border-zinc-700 px-3 py-1 text-xs text-zinc-300">
-                    Default: Compact View
-                  </Badge>
-                </div>
+      <div className="flex">
+        <div className="flex-1 space-y-4 p-4">
+          <div className="flex gap-2">
+            <Input
+              placeholder="Search..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="bg-zinc-900 text-white border-zinc-600"
+            />
 
-                <div className="space-y-3">
-                  <h1 className="font-sans text-4xl font-semibold tracking-tight text-blue-400 sm:text-5xl">
-                    Faster ordering by brand
-                  </h1>
-                  <p className="max-w-3xl text-sm leading-6 text-zinc-400 sm:text-base">
-                    Keep the default view dense for rapid scanning, expand the full page when
-                    needed, or open a single product row without changing the current ordering flow.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-3">
-                  <Button size="lg" className="rounded-full border border-zinc-700 bg-zinc-900 px-5 text-zinc-200 hover:bg-zinc-700 hover:text-white" onClick={createOrder}>
-                    <ShoppingCart className="size-4" />
-                    Create Order
-                  </Button>
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    className="rounded-full border-zinc-700 bg-zinc-900 px-5 text-zinc-200 hover:bg-zinc-700 hover:text-white"
-                    onClick={submitLatestDraft}
-                  >
-                    <Send className="size-4" />
-                    Submit Latest Draft
-                  </Button>
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    className="rounded-full border-zinc-700 bg-zinc-900 px-5 text-zinc-200 hover:bg-zinc-700 hover:text-white"
-                    onClick={exportAllOpenPO}
-                  >
-                    <Download className="size-4" />
-                    Export All Open POs
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-                <MetricCard label="Visible brands" value={String(brandGroups.length)} />
-                <MetricCard label="Active order lines" value={String(activeOrderLines)} />
-                <MetricCard
-                  label="Visible PO value"
-                  value={currencyFormatter.format(totalOrderValue)}
-                />
-              </div>
+            <div className="flex shrink-0 overflow-hidden rounded border border-zinc-700">
+              <Button
+                variant="ghost"
+                className={`rounded-none px-3 ${
+                  orderFilter === "all"
+                    ? "bg-white text-black hover:bg-zinc-200"
+                    : "bg-zinc-800 text-white hover:bg-zinc-700"
+                }`}
+                onClick={() => setOrderFilter("all")}
+              >
+                All Items
+              </Button>
+              <Button
+                variant="ghost"
+                className={`rounded-none border-l border-zinc-700 px-3 ${
+                  orderFilter === "needs"
+                    ? "bg-white text-black hover:bg-zinc-200"
+                    : "bg-zinc-800 text-white hover:bg-zinc-700"
+                }`}
+                onClick={() => setOrderFilter("needs")}
+              >
+                Needs Order
+              </Button>
+              <Button
+                variant="ghost"
+                className={`rounded-none border-l border-zinc-700 px-3 ${
+                  orderFilter === "credit"
+                    ? "bg-white text-black hover:bg-zinc-200"
+                    : "bg-zinc-800 text-white hover:bg-zinc-700"
+                }`}
+                onClick={() => setOrderFilter("credit")}
+              >
+                Has Credit
+              </Button>
             </div>
-          </section>
+          </div>
 
-          <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(260px,0.75fr)]">
-            <Card className="border border-zinc-700 bg-zinc-800 font-sans text-white shadow-sm">
-              <CardHeader className="gap-4 border-b border-zinc-700 pb-5">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="space-y-1">
-                    <CardTitle className="font-sans text-2xl font-semibold tracking-tight text-blue-400">
-                      Order Workspace
-                    </CardTitle>
-                    <p className="text-sm text-zinc-400">
-                      Search, filter by vendor, and switch between compact and expanded defaults.
-                    </p>
-                  </div>
+          <p className="text-xs text-zinc-500">
+            Accessories are excluded from ordering.
+          </p>
 
-                  <div className="inline-flex rounded-full border border-zinc-700 bg-zinc-900 p-1">
-                    <ViewModeButton
-                      active={viewMode === "compact"}
-                      onClick={() => setViewMode("compact")}
-                    >
-                      Compact View
-                    </ViewModeButton>
-                    <ViewModeButton
-                      active={viewMode === "expanded"}
-                      onClick={handleExpandedView}
-                    >
-                      Expanded View
-                    </ViewModeButton>
-                  </div>
-                </div>
+          <div className="space-y-4">
+            {groupedRows.map((distributorGroup) => {
+              const distributorCollapsed =
+                collapsedDistributors[distributorGroup.name] ?? false;
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
+              return (
+                <section
+                  key={distributorGroup.name}
+                  className="overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900/60"
+                >
+                  <button
                     type="button"
-                    variant="outline"
-                    size="sm"
-                    className="rounded-full border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
-                    onClick={collapseAllBrands}
-                    disabled={brandGroups.length === 0}
+                    onClick={() => toggleDistributor(distributorGroup.name)}
+                    className="flex w-full items-center justify-between gap-3 border-b border-zinc-700 bg-zinc-800 px-4 py-3 text-left transition hover:bg-zinc-700"
+                    aria-expanded={!distributorCollapsed}
                   >
-                    Collapse All Brands
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="rounded-full border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
-                    onClick={expandAllBrands}
-                    disabled={brandGroups.length === 0}
-                  >
-                    Expand All Brands
-                  </Button>
-                </div>
+                    <span className="flex min-w-0 items-center gap-3">
+                      {distributorCollapsed ? (
+                        <ChevronRight className="h-5 w-5 shrink-0 text-blue-300" />
+                      ) : (
+                        <ChevronDown className="h-5 w-5 shrink-0 text-blue-300" />
+                      )}
+                      <span className="truncate text-lg font-semibold tracking-tight text-blue-300">
+                        {distributorGroup.name}
+                      </span>
+                    </span>
+                    <span className="shrink-0 rounded-full border border-zinc-600 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300">
+                      {distributorGroup.itemsCount} items
+                    </span>
+                  </button>
 
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-zinc-400" />
-                    <Input
-                      type="text"
-                      value={search}
-                      onChange={(event) => handleSearchChange(event.target.value)}
-                      placeholder="Search brand, product, SKU, category, or vendor"
-                      className="border-zinc-700 bg-zinc-900 pl-9 font-sans text-white placeholder:text-zinc-500 focus-visible:border-zinc-500"
-                    />
-                  </div>
+                  {!distributorCollapsed ? (
+                    <div className="space-y-3 p-3 sm:p-4">
+                      {distributorGroup.brands.map((brandGroup) => {
+                        const key = brandKey(distributorGroup.name, brandGroup.name);
+                        const noteKey = creditKey(distributorGroup.name, brandGroup.name);
+                        const brandCollapsed = collapsedBrands[key] ?? true;
+                        const noteExpanded = expandedVendorNotes[noteKey] ?? false;
+                        const vendorNote = vendorNotes[noteKey] ?? "";
+                        const trimmedVendorNote = vendorNote.trim();
+                        const availableCredit = getAvailableCredit(
+                          distributorGroup.name,
+                          brandGroup.name
+                        );
 
-                  <select
-                    value={vendorFilter}
-                    onChange={(event) => handleVendorFilterChange(event.target.value)}
-                    className="h-10 rounded-lg border border-zinc-700 bg-zinc-900 px-3 font-sans text-sm text-white outline-none transition focus-visible:border-zinc-500 focus-visible:ring-3 focus-visible:ring-zinc-500/30"
-                    aria-label="Filter by vendor"
-                  >
-                    {vendors.map((vendor) => (
-                      <option key={vendor} value={vendor}>
-                        {vendor === "All" ? "All vendors" : vendor}
-                      </option>
-                    ))}
-                  </select>
-
-                  <label className="inline-flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-200">
-                    <input
-                      type="checkbox"
-                      checked={showOnlyReorders}
-                      onChange={(event) => handleShowOnlyReordersChange(event.target.checked)}
-                      className="size-4 rounded border-zinc-700 bg-zinc-900"
-                    />
-                    Show only reorder items
-                  </label>
-                </div>
-              </CardHeader>
-
-              <CardContent className="space-y-4 pt-4">
-                {message ? (
-                  <div
-                    className={cn(
-                      "rounded-2xl border px-4 py-3 text-sm",
-                      isErrorMessage
-                        ? "border-red-500/40 bg-red-500/10 text-red-400"
-                        : "border-blue-500/40 bg-blue-500/10 text-blue-400"
-                    )}
-                  >
-                    {message}
-                  </div>
-                ) : null}
-
-                {loading ? (
-                  <div className="space-y-4">
-                    {Array.from({ length: 4 }).map((_, index) => (
-                      <div
-                        key={index}
-                        className="h-28 animate-pulse rounded-2xl border border-zinc-700 bg-zinc-800"
-                      />
-                    ))}
-                  </div>
-                ) : brandGroups.length === 0 ? (
-                  <div className="rounded-3xl border border-dashed border-zinc-700 bg-zinc-800 px-6 py-12 text-center">
-                    <h2 className="text-lg font-semibold text-white">
-                      No products match these filters.
-                    </h2>
-                    <p className="mt-2 text-sm text-zinc-400">
-                      Adjust the search, vendor filter, or reorder-only toggle to see more products.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {brandGroups.map(([brand, brandRows]) => {
-                      const isBrandExpanded = !(collapsedBrands[brand] ?? true);
-                      const brandValue = brandRows.reduce((sum, row) => sum + row.lineTotal, 0);
-                      const reorderCount = brandRows.filter((row) => row.suggested > 0).length;
-
-                      return (
-                        <section
-                          key={brand}
-                          className="mt-2 overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-800 shadow-sm first:mt-0"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => toggleBrand(brand)}
-                            className="flex w-full items-center justify-between gap-3 border-b border-zinc-700 bg-zinc-800 px-4 py-3 text-left transition hover:bg-zinc-700 sm:px-5"
-                            aria-expanded={isBrandExpanded}
+                        return (
+                          <section
+                            key={key}
+                            className="rounded-xl border border-zinc-700 bg-zinc-900"
                           >
-                            <div className="flex min-w-0 items-center gap-3">
-                              <span className="rounded-full border border-zinc-700 bg-zinc-900 p-2 text-zinc-300 shadow-sm">
-                                {isBrandExpanded ? (
-                                  <ChevronUp className="size-4" />
-                                ) : (
-                                  <ChevronDown className="size-4" />
-                                )}
-                              </span>
-                              <div className="min-w-0 space-y-1.5">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h2 className="text-lg font-bold tracking-tight text-purple-400 sm:text-xl">
-                                    {brand}
-                                  </h2>
-                                  <Badge
-                                    variant="secondary"
-                                    className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-300"
+                            <div className="border-b border-zinc-700 transition hover:bg-zinc-800">
+                              <div className="flex w-full flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    toggleBrand(distributorGroup.name, brandGroup.name)
+                                  }
+                                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                  aria-expanded={!brandCollapsed}
+                                >
+                                  {brandCollapsed ? (
+                                    <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
+                                  ) : (
+                                    <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" />
+                                  )}
+                                  <span className="truncate text-sm font-semibold text-zinc-100">
+                                    {brandGroup.name}
+                                  </span>
+                                </button>
+                                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:justify-end">
+                                  {availableCredit > 0 ? (
+                                    <span className="rounded-full border border-green-500/30 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-300">
+                                      Use Credit Available
+                                    </span>
+                                  ) : null}
+                                  <span
+                                    className={
+                                      availableCredit > 0
+                                        ? "font-semibold text-green-300"
+                                        : "text-zinc-400"
+                                    }
                                   >
-                                    {brandRows.length} product{brandRows.length === 1 ? "" : "s"}
-                                  </Badge>
-                                </div>
-                                <p className="text-sm text-zinc-400">
-                                  {reorderCount} reorder line{reorderCount === 1 ? "" : "s"} ready
-                                  in this section
-                                </p>
+                                    Available Credit: {formatCurrency(availableCredit)}
+                                  </span>
+                                  <span className="text-zinc-400">
+                                    {brandGroup.items.length} items
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      toggleVendorNote(distributorGroup.name, brandGroup.name)
+                                    }
+                                    className={`rounded border px-2 py-0.5 text-[11px] font-semibold transition ${
+                                      trimmedVendorNote
+                                        ? "border-amber-400/40 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20"
+                                        : "border-zinc-600 bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                                    }`}
+                                  >
+                                    {trimmedVendorNote ? "Note" : "Add Note"}
+                                  </button>
+                                </span>
                               </div>
                             </div>
 
-                            <div className="flex flex-wrap items-center justify-end gap-2">
-                              <Badge variant="secondary" className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-300">
-                                Brand Group
-                              </Badge>
-                              <Badge variant="outline" className="rounded-full border-zinc-700 px-3 py-1 text-zinc-300">
-                                {currencyFormatter.format(brandValue)}
-                              </Badge>
-                              <span className="inline-flex min-w-28 items-center justify-end gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-right text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-                                {isBrandExpanded ? "Collapse" : "Expand"}
-                                {isBrandExpanded ? (
-                                  <ChevronUp className="size-3.5" />
-                                ) : (
-                                  <ChevronDown className="size-3.5" />
-                                )}
-                              </span>
-                            </div>
-                          </button>
-
-                          {isBrandExpanded ? (
-                            <div
-                              className={cn(
-                                viewMode === "compact"
-                                  ? "grid gap-2 p-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
-                                  : "divide-y divide-zinc-700"
-                              )}
-                            >
-                              {brandRows.map((row) => {
-                                const rowExpanded = isRowExpanded(row.id);
-                                const needsReorderHighlight = row.onHand < row.par;
-
-                                if (!rowExpanded) {
-                                  const inventoryTone = getInventoryTextClass(row.onHand, row.par);
-
-                                  return (
-                                    <article
-                                      key={row.id}
-                                      className={cn(
-                                        "h-[80px] rounded-lg border border-zinc-700 bg-zinc-800 p-2 font-sans shadow-sm transition hover:bg-zinc-700"
-                                      )}
-                                    >
-                                      <div className="flex h-full min-h-0 flex-col justify-between gap-1">
-                                        <div className="flex min-w-0 items-start justify-between gap-1.5">
-                                          <div className="min-w-0 flex-1">
-                                            <div className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
-                                              {getCompactDisplayName(row.product_name, brand)}
-                                            </div>
-                                          </div>
-
-                                          <button
-                                            type="button"
-                                            onClick={() => toggleRowExpansion(row.id)}
-                                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-600 hover:text-white"
-                                            aria-expanded={rowExpanded}
-                                            aria-label={`Expand details for ${row.product_name}`}
-                                          >
-                                            <ChevronDown className="size-3.5" />
-                                          </button>
-                                        </div>
-
-                                        <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-tight text-zinc-400">
-                                          <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
-                                            <span className={inventoryTone}>Inv {row.onHand}</span>
-                                            <span aria-hidden="true">·</span>
-                                            <span>Par {row.par}</span>
-                                          </div>
-                                          <CompactQuantityStepper
-                                            value={row.suggested}
-                                            onDecrease={() => adjustSuggested(row.id, -1)}
-                                            onIncrease={() => adjustSuggested(row.id, 1)}
-                                            productName={row.product_name}
-                                          />
-                                        </div>
-                                      </div>
-                                    </article>
-                                  );
+                            {noteExpanded ? (
+                              <div className="border-b border-zinc-800 bg-zinc-950/50 px-3 py-2">
+                                <textarea
+                                  value={vendorNote}
+                                  onChange={(event) =>
+                                    updateVendorNote(
+                                      distributorGroup.name,
+                                      brandGroup.name,
+                                      event.target.value
+                                    )
+                                  }
+                                  placeholder="Internal note for this vendor..."
+                                  className="min-h-16 w-full resize-y rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs leading-snug text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
+                                />
+                              </div>
+                            ) : trimmedVendorNote ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  toggleVendorNote(distributorGroup.name, brandGroup.name)
                                 }
+                                className="block w-full border-b border-zinc-800 bg-zinc-950/40 px-3 py-1.5 text-left text-xs text-amber-100/90 transition hover:bg-zinc-800"
+                              >
+                                <span className="block truncate">
+                                  <span className="mr-1 font-semibold text-amber-300">Note:</span>
+                                  {trimmedVendorNote}
+                                </span>
+                              </button>
+                            ) : null}
 
-                                return (
+                            {!brandCollapsed ? (
+                              <div className="grid gap-2 p-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                                {brandGroup.items.map((row) => (
                                   <article
                                     key={row.id}
-                                    className={cn(
-                                      viewMode === "compact"
-                                        ? "sm:col-span-2 md:col-span-4 xl:col-span-5 2xl:col-span-6"
-                                        : "px-4 py-4 sm:px-6"
-                                    )}
+                                    className="min-h-[116px] rounded-lg border border-zinc-700 bg-zinc-800 p-2.5 font-sans shadow-sm transition hover:bg-zinc-700"
                                   >
-                                    <div
-                                      className={cn(
-                                        "rounded-[1.4rem] border border-zinc-700 bg-zinc-800 p-4 shadow-sm"
-                                      )}
-                                    >
-                                      <div className="flex flex-col gap-4">
-                                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                          <div className="min-w-0">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              <h3 className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
-                                                {row.product_name}
-                                              </h3>
-                                              {needsReorderHighlight ? (
-                                                <Badge
-                                                  variant="outline"
-                                                  className="rounded-full border-yellow-500/40 bg-yellow-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-yellow-400"
-                                                >
-                                                  Low
-                                                </Badge>
-                                              ) : null}
-                                            </div>
-                                            <p className="mt-1 text-xs leading-tight text-zinc-400">
-                                              {row.brand_name}
-                                            </p>
-                                          </div>
+                                    <div className="flex h-full min-h-0 flex-col justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <div className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
+                                          {getCompactDisplayName(
+                                            row.product_name,
+                                            brandGroup.name
+                                          )}
+                                        </div>
+                                        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs leading-tight text-zinc-400">
+                                          <span>On Hand {row.onHand}</span>
+                                          <span aria-hidden="true">·</span>
+                                          <span>Par {row.par}</span>
+                                          <span aria-hidden="true">·</span>
+                                          <span>Suggested {row.suggested}</span>
+                                        </div>
+                                      </div>
 
-                                          <button
-                                            type="button"
-                                            onClick={() => toggleRowExpansion(row.id)}
-                                            className="inline-flex items-center gap-2 self-start rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-700 hover:text-white"
-                                            aria-expanded={rowExpanded}
-                                            aria-label={`${rowExpanded ? "Collapse" : "Expand"} details for ${row.product_name}`}
+                                      <div className="flex items-center justify-between gap-1.5 whitespace-nowrap">
+                                        <Button
+                                          variant="outline"
+                                          className="h-7 shrink-0 bg-white px-1.5 text-[11px] text-black hover:bg-zinc-200"
+                                          onClick={() => updateQty(row.id, row.suggested)}
+                                        >
+                                          <Zap size={12} />
+                                          Suggested
+                                        </Button>
+
+                                        <div className="flex shrink-0 items-center gap-1">
+                                          <Button
+                                            size="icon"
+                                            className="size-7"
+                                            onClick={() => adjust(row.id, -1)}
                                           >
-                                            {rowExpanded ? (
-                                              <ChevronUp className="size-4" />
-                                            ) : (
-                                              <ChevronDown className="size-4" />
-                                            )}
-                                            {rowExpanded ? "Collapse" : "Expand"}
-                                          </button>
-                                        </div>
+                                            <Minus size={13} />
+                                          </Button>
 
-                                        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_150px_150px_auto]">
-                                          <RowMetric
-                                            label="Current Inventory"
-                                            value={String(row.onHand)}
-                                            valueClassName={getInventoryTextClass(row.onHand, row.par)}
+                                          <input
+                                            value={row.orderQty}
+                                            onChange={(e) =>
+                                              updateQty(row.id, Number(e.target.value))
+                                            }
+                                            className="h-7 w-10 rounded bg-zinc-700 text-center text-sm text-white"
                                           />
-                                          <RowMetric label="Par Level" value={String(row.par)} />
-                                          <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3">
-                                            <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-                                              Order Quantity
-                                            </div>
-                                            <div className="mt-2 text-lg font-semibold tracking-tight text-white">
-                                              {row.suggested}
-                                            </div>
-                                          </div>
-                                          <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3">
-                                            <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-                                              Adjust Order
-                                            </div>
-                                            <div className="mt-2">
-                                              <QuantityStepper
-                                                value={row.suggested}
-                                                onDecrease={() => adjustSuggested(row.id, -1)}
-                                                onIncrease={() => adjustSuggested(row.id, 1)}
-                                                productName={row.product_name}
-                                              />
-                                            </div>
-                                          </div>
+
+                                          <Button
+                                            size="icon"
+                                            className="size-7"
+                                            onClick={() => adjust(row.id, 1)}
+                                          >
+                                            <Plus size={13} />
+                                          </Button>
                                         </div>
-
-                                        {rowExpanded ? (
-                                          <div className="rounded-[1.3rem] border border-zinc-700 bg-zinc-900 p-4 sm:p-5">
-                                            <div className="mb-4 flex flex-wrap items-center gap-2">
-                                              <Badge
-                                                variant="outline"
-                                                className={cn(
-                                                  "rounded-full px-3 py-1",
-                                                  getStatusTone(row.status)
-                                                )}
-                                              >
-                                                {row.status}
-                                              </Badge>
-                                              <Badge variant="outline" className="rounded-full border-zinc-700 px-3 py-1 text-zinc-300">
-                                                {currencyFormatter.format(row.lineTotal)} line total
-                                              </Badge>
-                                            </div>
-
-                                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-                                              <DetailItem label="Brand" value={row.brand_name} />
-                                              <DetailItem label="SKU" value={row.sku || "—"} />
-                                              <DetailItem label="Category" value={row.category || "—"} />
-                                              <DetailItem label="Vendor" value={row.vendor} />
-                                              <DetailItem
-                                                label="Price"
-                                                value={currencyFormatter.format(row.current_price)}
-                                              />
-                                              <DetailItem
-                                                label="Current Inventory"
-                                                value={String(row.onHand)}
-                                                valueClassName={getInventoryTextClass(row.onHand, row.par)}
-                                              />
-                                              <DetailItem label="Par Level" value={String(row.par)} />
-                                              <div className="rounded-2xl border border-zinc-700 bg-zinc-800 px-4 py-3 md:col-span-2 xl:col-span-2">
-                                                <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-                                                  Order Quantity Controls
-                                                </div>
-                                                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-                                                  <QuantityStepper
-                                                    value={row.suggested}
-                                                    onDecrease={() => adjustSuggested(row.id, -1)}
-                                                    onIncrease={() => adjustSuggested(row.id, 1)}
-                                                    productName={row.product_name}
-                                                  />
-                                                  <Input
-                                                    type="number"
-                                                    min="0"
-                                                    value={row.suggested}
-                                                    onChange={(event) =>
-                                                      updateSuggested(row.id, event.target.value)
-                                                    }
-                                                    className="w-full border-zinc-700 bg-zinc-900 font-sans text-white focus-visible:border-zinc-500 sm:w-28"
-                                                    aria-label={`Order quantity input for ${row.product_name}`}
-                                                  />
-                                                </div>
-                                              </div>
-                                            </div>
-                                          </div>
-                                        ) : null}
                                       </div>
                                     </div>
                                   </article>
-                                );
-                              })}
-                            </div>
-                          ) : null}
-                        </section>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                                ))}
+                              </div>
+                            ) : null}
+                          </section>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </section>
+              );
+            })}
 
-            <div className="space-y-4">
-              <Card className="border border-zinc-700 bg-zinc-800 font-sans text-white shadow-sm">
-                <CardHeader className="gap-2 border-b border-zinc-700 pb-4">
-                  <CardTitle className="font-sans text-xl font-semibold tracking-tight text-blue-400">
-                    Ordering Summary
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="grid gap-3 pt-6">
-                  <MetricCard label="Visible units ordered" value={String(totalOrderUnits)} />
-                  <MetricCard
-                    label="Current view mode"
-                    value={viewMode === "compact" ? "Compact View" : "Expanded View"}
-                  />
-                  <MetricCard label="Vendor filter" value={vendorFilter} />
-                </CardContent>
-              </Card>
-
-              <Card className="border border-zinc-700 bg-zinc-800 font-sans text-white shadow-sm">
-                <CardHeader className="gap-2 border-b border-zinc-700 pb-4">
-                  <CardTitle className="font-sans text-xl font-semibold tracking-tight text-blue-400">
-                    Export by Vendor
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="flex flex-wrap gap-2 pt-6">
-                  {vendors
-                    .filter((vendor) => vendor !== "All")
-                    .map((vendor) => (
-                      <Button
-                        key={vendor}
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="rounded-full border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
-                        onClick={() => exportVendorPO(vendor)}
-                      >
-                        <Download className="size-3.5" />
-                        {vendor}
-                      </Button>
-                    ))}
-                </CardContent>
-              </Card>
-            </div>
-          </section>
+            {filtered.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-zinc-700 p-10 text-center text-sm text-zinc-400">
+                No order items match your filters.
+              </div>
+            ) : null}
+          </div>
         </div>
-      </main>
-    </div>
-  );
-}
 
-function ViewModeButton({
-  active,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  children: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-full px-4 py-2 text-sm font-medium transition",
-        active ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
-      )}
-    >
-      {children}
-    </button>
-  );
-}
+        <div className="sticky top-0 h-screen w-80 overflow-y-auto border-l border-zinc-800 bg-zinc-950 p-4">
+          <div className="mb-4 flex items-center gap-2">
+            <ShoppingCart size={18} />
+            <h2 className="font-semibold">Order Review</h2>
+          </div>
 
-function MetricCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-4">
-      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-        {label}
+          <div className="mb-4 rounded bg-zinc-900 p-3 text-sm">
+            <div className="text-zinc-400">Status</div>
+            <div className="font-semibold">
+              {orderStatus === "none" && "Not Created"}
+              {orderStatus === "draft" && "Draft Created"}
+              {orderStatus === "submitted" && "Submitted for Approval"}
+            </div>
+          </div>
+
+          {selected.length === 0 && (
+            <div className="text-sm text-zinc-500">No items selected yet.</div>
+          )}
+
+          {Object.entries(groupedByVendor).map(([distributor, brands]) => (
+            <div key={distributor} className="mb-4">
+              <div className="mb-1 text-sm font-semibold text-zinc-400">
+                {distributor}
+              </div>
+
+              {Object.entries(brands).map(([brandName, items]) => {
+                const availableCredit = getAvailableCredit(distributor, brandName);
+
+                return (
+                  <div key={`${distributor}__${brandName}`} className="mb-2">
+                    <div className="mb-1 text-xs font-semibold text-zinc-500">
+                      {brandName}
+                      <span
+                        className={`ml-2 ${
+                          availableCredit > 0 ? "text-green-300" : "text-zinc-500"
+                        }`}
+                      >
+                        Available Credit: {formatCurrency(availableCredit)}
+                      </span>
+                    </div>
+                    {availableCredit > 0 ? (
+                      <div className="mb-1 rounded border border-green-500/20 bg-green-500/10 px-2 py-1 text-xs leading-snug text-green-300">
+                        Credit available — consider applying before payment.
+                      </div>
+                    ) : null}
+
+                    {items.map((item) => (
+                      <div key={item.id} className="flex justify-between text-sm">
+                        <span>{item.product_name}</span>
+                        <span>{item.orderQty}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+
+          <div className="mt-4 border-t border-zinc-800 pt-4">
+            <Button className="mb-2 w-full" onClick={createDraft}>
+              Create Draft
+            </Button>
+
+            <Button
+              variant="outline"
+              className="w-full bg-zinc-800 text-white border-zinc-700 hover:bg-zinc-700"
+              onClick={submitForApproval}
+              disabled={!draftOrderId || orderStatus === "submitted"}
+            >
+              Submit for Approval
+            </Button>
+          </div>
+        </div>
       </div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight text-white">{value}</div>
     </div>
-  );
-}
-
-function RowMetric({
-  label,
-  value,
-  valueClassName,
-}: {
-  label: string;
-  value: string;
-  valueClassName?: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3">
-      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-        {label}
-      </div>
-      <div className={cn("mt-2 text-lg font-semibold tracking-tight text-white", valueClassName)}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function DetailItem({
-  label,
-  value,
-  valueClassName,
-}: {
-  label: string;
-  value: string;
-  valueClassName?: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-zinc-700 bg-zinc-800 px-4 py-3">
-      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-        {label}
-      </div>
-      <div className={cn("mt-1 text-sm font-medium text-white", valueClassName)}>{value}</div>
-    </div>
-  );
-}
-
-function QuantityStepper({
-  onDecrease,
-  onIncrease,
-  productName,
-  value,
-}: {
-  onDecrease: () => void;
-  onIncrease: () => void;
-  productName: string;
-  value: number;
-}) {
-  return (
-    <div className="inline-flex items-center rounded-full border border-zinc-700 bg-zinc-900 p-1">
-      <button
-        type="button"
-        onClick={onDecrease}
-        className="inline-flex size-8 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
-        aria-label={`Decrease order quantity for ${productName}`}
-      >
-        <Minus className="size-4" />
-      </button>
-      <span className="min-w-12 text-center text-base font-semibold text-white">{value}</span>
-      <button
-        type="button"
-        onClick={onIncrease}
-        className="inline-flex size-8 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
-        aria-label={`Increase order quantity for ${productName}`}
-      >
-        <Plus className="size-4" />
-      </button>
-    </div>
-  );
-}
-
-function CompactQuantityStepper({
-  onDecrease,
-  onIncrease,
-  productName,
-  value,
-}: {
-  onDecrease: () => void;
-  onIncrease: () => void;
-  productName: string;
-  value: number;
-}) {
-  return (
-    <span className="inline-flex items-center gap-1 align-middle text-xs text-white">
-      <button
-        type="button"
-        onClick={onDecrease}
-        className="inline-flex size-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
-        aria-label={`Decrease order quantity for ${productName}`}
-      >
-        <Minus className="size-3" />
-      </button>
-      <span className="min-w-4 text-center text-xs font-semibold tabular-nums">{value}</span>
-      <button
-        type="button"
-        onClick={onIncrease}
-        className="inline-flex size-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
-        aria-label={`Increase order quantity for ${productName}`}
-      >
-        <Plus className="size-3" />
-      </button>
-    </span>
   );
 }
