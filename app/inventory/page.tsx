@@ -1,14 +1,25 @@
-import { createClient } from "@/lib/supabase/server"
 import NavBar from "@/components/NavBar"
 import InventoryCards, { type InventoryItem } from "@/components/inventory/inventory-cards"
+import { loadSuggestedParSummary, type SalesParSummary } from "@/lib/sales/par"
+import { createServiceRoleClient } from "@/lib/supabase/service"
+
+const EMPTY_SALES_SUMMARY: SalesParSummary = {
+  window_days: 30,
+  target_days_of_stock: 14,
+  total_sales_quantity: 0,
+  matched_sales_rows: 0,
+  metrics: [],
+}
 
 export default async function InventoryPage() {
-  const supabase = await createClient()
+  const supabase = createServiceRoleClient()
 
   // 1. get products
   const { data: products, error: productError } = await supabase
     .from("products")
-    .select("id, product_name, brand_name, category, distro, sku, current_price, distributor_locked")
+    .select(
+      "id, product_name, brand_name, category, distro, sku, current_price, distributor_locked"
+    )
     .order("product_name", { ascending: true })
 
   if (productError) {
@@ -24,6 +35,15 @@ export default async function InventoryPage() {
     return <div className="min-h-screen bg-background p-6 text-red-500">{inventoryError.message}</div>
   }
 
+  const salesSummary = await loadSuggestedParSummary(supabase, {
+    windowDays: 30,
+    targetDaysOfStock: 14,
+  }).catch(() => EMPTY_SALES_SUMMARY)
+
+  const salesMetricsMap = new Map(
+    salesSummary.metrics.map((metric) => [metric.product_id, metric])
+  )
+
   // 3. map inventory by product_id
   const inventoryMap = new Map(
     (inventory ?? []).map((i) => [i.product_id, i])
@@ -32,6 +52,7 @@ export default async function InventoryPage() {
   // 4. combine data
   const items: InventoryItem[] = (products ?? []).map((product) => {
     const inv = inventoryMap.get(product.id)
+    const salesMetric = salesMetricsMap.get(product.id)
 
     return {
       id: product.id,
@@ -43,6 +64,12 @@ export default async function InventoryPage() {
       price: product.current_price,
       inventory: inv?.on_hand ?? 0,
       low_stock_threshold: inv?.par_level ?? 5,
+        current_par: inv?.par_level ?? 0,
+      suggested_par: salesMetric?.suggested_par ?? 0,
+      avg_daily_sales: salesMetric?.avg_daily_sales ?? 0,
+      window_sales: salesMetric?.window_sales ?? 0,
+      sales_window_days: salesSummary.window_days,
+      target_days_of_stock: salesSummary.target_days_of_stock,
       distributor_locked: product.distributor_locked ?? false,
       image_url: null,
     }
@@ -61,7 +88,10 @@ export default async function InventoryPage() {
           </p>
         </div>
 
-        <InventoryCards items={items} />
+        <InventoryCards
+          items={items}
+          salesSummary={salesSummary}
+        />
       </main>
     </div>
   )

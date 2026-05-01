@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, LayoutDashboard, Warehouse } from "lucide-react";
+import { ArrowLeft, LayoutDashboard, TrendingUp, Warehouse } from "lucide-react";
 import NavBar from "@/components/NavBar";
 import ImportUploadClient from "@/components/import/import-upload-client";
 
@@ -30,7 +30,7 @@ export default function ImportPage() {
               </div>
 
               <nav
-                className="grid gap-2 sm:grid-cols-2 lg:min-w-[360px]"
+                className="grid gap-2 sm:grid-cols-3 lg:min-w-[540px]"
                 aria-label="Import page quick links"
               >
                 <Link
@@ -52,6 +52,16 @@ export default function ImportPage() {
                     <div className="text-xs text-muted-foreground">Go to step two</div>
                   </div>
                   <Warehouse className="size-4 text-foreground" />
+                </Link>
+                <Link
+                  href="/sales-import"
+                  className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-background/85 px-4 py-3 transition hover:border-foreground/20 hover:bg-muted/60"
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">Sales Import</div>
+                    <div className="text-xs text-muted-foreground">Load sales history</div>
+                  </div>
+                  <TrendingUp className="size-4 text-foreground" />
                 </Link>
               </nav>
             </div>

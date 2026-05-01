@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   PackageSearch,
   ShoppingCart,
+  TrendingUp,
   Warehouse,
 } from "lucide-react";
 import NavBar from "@/components/NavBar";
@@ -42,6 +43,12 @@ const destinations = [
     title: "Inventory Import",
     description: "Upload inventory counts after the product catalog is current.",
     icon: Warehouse,
+  },
+  {
+    href: "/sales-import",
+    title: "Sales Import",
+    description: "Load past sales to calculate suggested par levels.",
+    icon: TrendingUp,
   },
 ];
 
@@ -93,7 +100,7 @@ export default async function Home() {
             </div>
           </section>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5" aria-label="Home destinations">
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6" aria-label="Home destinations">
             {destinations.map((destination) => {
               const Icon = destination.icon;
 

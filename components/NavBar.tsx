@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Box,
   Compass,
+  TrendingUp,
   FileSpreadsheet,
   Home,
   LayoutDashboard,
@@ -70,7 +71,7 @@ export default function NavBar() {
       label: "Orders",
       icon: ShoppingCart,
     },
-    ...(canAccessImports
+        ...(canAccessImports
       ? [
           {
             href: "/import",
@@ -81,6 +82,11 @@ export default function NavBar() {
             href: "/inventory-import",
             label: "Inventory Import",
             icon: Warehouse,
+          },
+          {
+            href: "/sales-import",
+            label: "Sales Import",
+            icon: TrendingUp,
           },
         ]
       : []),

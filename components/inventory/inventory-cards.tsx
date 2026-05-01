@@ -6,10 +6,12 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  CheckCheck,
   Minus,
   Package2,
   Plus,
   Search,
+  RefreshCw,
   ShoppingCart,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -37,12 +39,39 @@ export type InventoryItem = {
   price: number | null
   inventory: number | null
   low_stock_threshold?: number | null
+  current_par?: number | null
+  suggested_par?: number | null
+  avg_daily_sales?: number | null
+  window_sales?: number | null
+  sales_window_days?: number | null
+  target_days_of_stock?: number | null
   distributor_locked?: boolean | null
   image_url?: string | null
 }
 
+export type SalesParSummary = {
+  window_days: number
+  target_days_of_stock: number
+  total_sales_quantity: number
+  matched_sales_rows: number
+  metrics: SalesParMetric[]
+}
+
+export type SalesParMetric = {
+  product_id: string
+  sku: string | null
+  product_name: string
+  brand_name: string | null
+  current_par: number
+  suggested_par: number
+  avg_daily_sales: number
+  window_sales: number
+  matched_sales_rows: number
+}
+
 type Props = {
   items: InventoryItem[]
+  salesSummary: SalesParSummary
 }
 
 type ViewMode = "compact" | "expanded"
@@ -413,7 +442,19 @@ function stockTone(inventory: number, threshold: number) {
   }
 }
 
-export default function InventoryCards({ items }: Props) {
+export default function InventoryCards({ items, salesSummary }: Props) {
+  const [salesWindowDays, setSalesWindowDays] = useState(salesSummary.window_days)
+  const [targetDaysOfStock, setTargetDaysOfStock] = useState(
+    salesSummary.target_days_of_stock
+  )
+  const [salesSummaryState, setSalesSummaryState] = useState<SalesParSummary>(salesSummary)
+  const [salesMetrics, setSalesMetrics] = useState<SalesParMetric[]>(salesSummary.metrics)
+  const [salesActionStatus, setSalesActionStatus] = useState<{
+    tone: "success" | "error" | "progress"
+    text: string
+  } | null>(null)
+  const [isRecalculating, setIsRecalculating] = useState(false)
+  const [isApplying, setIsApplying] = useState(false)
   const [query, setQuery] = useState("")
   const [category, setCategory] = useState("all")
   const [stockFilter, setStockFilter] = useState<"all" | "in" | "low" | "out">("all")
@@ -442,6 +483,11 @@ export default function InventoryCards({ items }: Props) {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>(null)
 
   const supabase = useMemo(() => createClient(), [])
+  const salesMetricsMap = useMemo(
+    () => new Map(salesMetrics.map((metric) => [metric.product_id, metric])),
+    [salesMetrics]
+  )
+  const salesWindowLabel = `${salesWindowDays}-Day Sales`
 
   const categories = useMemo(() => {
     const savedCategories = Array.from(
@@ -614,6 +660,90 @@ export default function InventoryCards({ items }: Props) {
         distributorGroup.brands.map((brandGroup) => `${distributorGroup.name}::${brandGroup.name}`)
       )
     )
+  }
+
+  async function recalculateSuggestedPars() {
+    setIsRecalculating(true)
+    setSalesActionStatus({
+      tone: "progress",
+      text: "Recalculating suggested pars...",
+    })
+
+    try {
+      const response = await fetch(
+        `/api/sales-pars?window_days=${salesWindowDays}&target_days=${targetDaysOfStock}`
+      )
+      const data = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Could not recalculate suggested pars.")
+      }
+
+      setSalesSummaryState({
+        window_days: data.window_days ?? salesWindowDays,
+        target_days_of_stock: data.target_days_of_stock ?? targetDaysOfStock,
+        total_sales_quantity: data.total_sales_quantity ?? 0,
+        matched_sales_rows: data.matched_sales_rows ?? 0,
+        metrics: data.metrics ?? [],
+      })
+      setSalesMetrics(data.metrics ?? [])
+      setSalesActionStatus({
+        tone: "success",
+        text: `Recalculated ${data.metrics?.length ?? 0} suggested pars.`,
+      })
+    } catch (error) {
+      setSalesActionStatus({
+        tone: "error",
+        text:
+          error instanceof Error ? error.message : "Could not recalculate suggested pars.",
+      })
+    } finally {
+      setIsRecalculating(false)
+    }
+  }
+
+  async function applySuggestedPars() {
+    setIsApplying(true)
+    setSalesActionStatus({
+      tone: "progress",
+      text: "Applying suggested pars...",
+    })
+
+    try {
+      const response = await fetch("/api/sales-pars", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          window_days: salesWindowDays,
+          target_days_of_stock: targetDaysOfStock,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Could not apply suggested pars.")
+      }
+
+      setSalesSummaryState({
+        window_days: data.window_days ?? salesWindowDays,
+        target_days_of_stock: data.target_days_of_stock ?? targetDaysOfStock,
+        total_sales_quantity: data.total_sales_quantity ?? 0,
+        matched_sales_rows: data.matched_sales_rows ?? 0,
+        metrics: data.metrics ?? [],
+      })
+      setSalesMetrics(data.metrics ?? [])
+      setSalesActionStatus({
+        tone: "success",
+        text: `Applied suggested pars to ${data.updated_count ?? data.metrics?.length ?? 0} products.`,
+      })
+    } catch (error) {
+      setSalesActionStatus({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Could not apply suggested pars.",
+      })
+    } finally {
+      setIsApplying(false)
+    }
   }
 
   function getQty(productId: string) {
@@ -854,6 +984,11 @@ export default function InventoryCards({ items }: Props) {
   function renderInventoryItem(item: InventoryItem, brandName: string) {
     const inventory = item.inventory ?? 0
     const threshold = item.low_stock_threshold ?? 5
+    const currentPar = item.current_par ?? threshold
+    const salesMetric = salesMetricsMap.get(item.id)
+    const suggestedPar = salesMetric?.suggested_par ?? item.suggested_par ?? 0
+    const avgDailySales = salesMetric?.avg_daily_sales ?? item.avg_daily_sales ?? 0
+    const windowSales = salesMetric?.window_sales ?? item.window_sales ?? 0
     const tone = stockTone(inventory, threshold)
     const isOut = inventory <= 0
     const isExpanded = isItemExpanded(item.id)
@@ -905,10 +1040,21 @@ export default function InventoryCards({ items }: Props) {
             </div>
 
             <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-tight text-muted-foreground">
-              <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
-                <span className={tone.textClass}>Inv {inventory}</span>
-                <span aria-hidden="true">·</span>
-                <span>Par {threshold}</span>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
+                  <span className={tone.textClass}>Inv {inventory}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>Par {currentPar}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>Sug {suggestedPar}</span>
+                </div>
+                <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
+                  <span>{formatMetricValue(avgDailySales)} avg/day</span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    {formatMetricValue(windowSales)} {salesWindowLabel}
+                  </span>
+                </div>
               </div>
               <CompactQuantityStepper
                 value={getQty(item.id)}
@@ -1019,7 +1165,7 @@ export default function InventoryCards({ items }: Props) {
               toneClass={tone.textClass}
               emphasized
             />
-            <SummaryPanel label="Reorder Threshold" value={String(threshold)} />
+            <SummaryPanel label="Current Par" value={String(currentPar)} />
             <div className={cn("rounded-2xl border px-4 py-3", tone.panelClass)}>
               <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
                 <Package2 className="h-3.5 w-3.5" />
@@ -1038,6 +1184,16 @@ export default function InventoryCards({ items }: Props) {
                 <DetailPanelItem label="Brand" value={item.brand || UNKNOWN_BRAND} />
                 <DetailPanelItem label="Category" value={item.category || "—"} />
                 <DetailPanelItem label="SKU" value={item.sku || "—"} />
+                <DetailPanelItem label="Current Par" value={String(currentPar)} />
+                <DetailPanelItem label="Suggested Par" value={String(suggestedPar)} />
+                <DetailPanelItem
+                  label="Avg Daily Sales"
+                  value={formatMetricValue(avgDailySales)}
+                />
+                <DetailPanelItem
+                  label={salesWindowLabel}
+                  value={formatMetricValue(windowSales)}
+                />
                 <DetailPanelItem
                   label="Price"
                   value={item.price != null ? currencyFormatter.format(item.price) : "—"}
@@ -1047,7 +1203,6 @@ export default function InventoryCards({ items }: Props) {
                   value={String(inventory)}
                   valueClassName={tone.textClass}
                 />
-                <DetailPanelItem label="Reorder Threshold" value={String(threshold)} />
 
                 <div className="rounded-2xl border border-border bg-card px-4 py-3 md:col-span-2 xl:col-span-2">
                   <div className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
@@ -1211,9 +1366,93 @@ export default function InventoryCards({ items }: Props) {
               Out of stock
             </Button>
           </div>
+
+          <div className="grid gap-3 rounded-2xl border border-border bg-background/70 p-4 xl:grid-cols-[minmax(0,220px)_minmax(0,220px)_auto_auto_minmax(0,1fr)] xl:items-end">
+            <label className="space-y-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                Sales window
+              </span>
+              <select
+                value={salesWindowDays}
+                onChange={(event) => setSalesWindowDays(Number(event.target.value))}
+                className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground outline-none focus-visible:border-ring"
+              >
+                {[7, 14, 30, 60, 90].map((option) => (
+                  <option key={option} value={option}>
+                    {option} days
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                Target stock days
+              </span>
+              <select
+                value={targetDaysOfStock}
+                onChange={(event) => setTargetDaysOfStock(Number(event.target.value))}
+                className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground outline-none focus-visible:border-ring"
+              >
+                {[7, 14, 21, 30].map((option) => (
+                  <option key={option} value={option}>
+                    {option} days
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void recalculateSuggestedPars()}
+              disabled={isRecalculating || isApplying}
+              className="h-10 justify-center border-border bg-background text-foreground hover:bg-muted hover:text-foreground"
+            >
+              <RefreshCw className={cn("size-4", isRecalculating && "animate-spin")} />
+              Recalculate Suggested Pars
+            </Button>
+
+            <Button
+              type="button"
+              onClick={() => void applySuggestedPars()}
+              disabled={isApplying || isRecalculating}
+              className="h-10 justify-center"
+            >
+              <CheckCheck className="size-4" />
+              Apply Suggested Pars
+            </Button>
+
+            <div className="text-xs leading-5 text-muted-foreground xl:col-span-5">
+              Suggested pars are based on {salesWindowDays} days of sales and a {targetDaysOfStock}
+              -day stock target.
+            </div>
+          </div>
         </CardHeader>
 
         <CardContent className="space-y-4 pt-4">
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatBox label="Products with sales" value={salesMetrics.filter((metric) => metric.window_sales > 0).length} tone="neutral" />
+            <StatBox label="Window sales" value={salesSummaryState.total_sales_quantity} tone="neutral" />
+            <StatBox label="Matched rows" value={salesSummaryState.matched_sales_rows} tone="neutral" />
+            <StatBox label="Suggested pars" value={salesMetrics.filter((metric) => metric.suggested_par > 0).length} tone="neutral" />
+          </section>
+
+          {salesActionStatus ? (
+            <div
+              className={cn(
+                "rounded-xl border px-4 py-3 text-sm font-medium",
+                salesActionStatus.tone === "success"
+                  ? "border-green-500/30 bg-green-500/10 text-green-300"
+                  : salesActionStatus.tone === "error"
+                    ? "border-red-500/40 bg-red-500/10 text-red-300"
+                    : "border-sky-500/30 bg-sky-500/10 text-sky-300"
+              )}
+            >
+              {salesActionStatus.text}
+            </div>
+          ) : null}
+
           {saveStatus ? (
             <div
               className={cn(
@@ -1406,6 +1645,33 @@ function ViewModeButton({
   )
 }
 
+function StatBox({
+  label,
+  tone,
+  value,
+}: {
+  label: string
+  tone: "neutral" | "success"
+  value: number
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border px-4 py-4",
+        tone === "neutral" && "border-border bg-background/80",
+        tone === "success" && "border-emerald-200 bg-emerald-50/70"
+      )}
+    >
+      <div className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+        {formatNumber(value)}
+      </div>
+    </div>
+  )
+}
+
 function DistributorSelect({
   className,
   compact = false,
@@ -1489,6 +1755,17 @@ function DetailPanelItem({
       <div className={cn("mt-1 text-sm font-medium text-foreground", valueClassName)}>{value}</div>
     </div>
   )
+}
+
+function formatMetricValue(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("en-US").format(value)
 }
 
 function CompactQuantityStepper({
