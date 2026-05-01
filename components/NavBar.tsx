@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import ThemeToggle from "./ThemeToggle";
 
 export default function NavBar() {
   const [supabase] = useState(() => createClient());
@@ -46,6 +47,8 @@ export default function NavBar() {
     window.location.href = "/login";
   }
 
+  const canAccessImports = role === "manager" || role === "admin";
+
   const navigationLinks = [
     {
       href: "/",
@@ -67,21 +70,25 @@ export default function NavBar() {
       label: "Orders",
       icon: ShoppingCart,
     },
-    {
-      href: "/import",
-      label: "Product Import",
-      icon: FileSpreadsheet,
-    },
-    {
-      href: "/inventory-import",
-      label: "Inventory Import",
-      icon: Warehouse,
-    },
+    ...(canAccessImports
+      ? [
+          {
+            href: "/import",
+            label: "Product Import",
+            icon: FileSpreadsheet,
+          },
+          {
+            href: "/inventory-import",
+            label: "Inventory Import",
+            icon: Warehouse,
+          },
+        ]
+      : []),
   ];
 
   const utilityLinks = [
     { href: "/order-history", label: "Order History" },
-    ...(role === "manager" || role === "admin"
+    ...(canAccessImports
       ? [
           { href: "/approvals", label: "Approvals" },
           { href: "/admin/vendors", label: "Vendors" },
@@ -91,20 +98,20 @@ export default function NavBar() {
   ];
 
   return (
-    <header className="sticky top-0 z-30 border-b border-zinc-700 bg-zinc-900/95 text-white backdrop-blur supports-[backdrop-filter]:bg-zinc-900/85">
+    <header className="sticky top-0 z-30 border-b border-border bg-card/95 text-card-foreground shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/85">
       <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center">
             <Link
               href="/"
-              className="inline-flex shrink-0 items-center gap-3 rounded-full border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-semibold tracking-[0.08em] text-blue-400 uppercase shadow-sm transition hover:bg-zinc-700"
+              className="inline-flex shrink-0 items-center gap-3 rounded-full border border-border bg-muted px-4 py-2 text-sm font-semibold tracking-[0.08em] text-blue-600 uppercase shadow-sm transition hover:bg-accent dark:text-blue-400"
             >
               <Compass className="size-4" />
               Pure Aloha Ordering
             </Link>
 
             <nav
-              className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-zinc-700 bg-zinc-800 p-1.5"
+              className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border bg-muted p-1.5"
               aria-label="Global navigation"
             >
               {navigationLinks.map((link) => {
@@ -119,8 +126,8 @@ export default function NavBar() {
                     className={cn(
                       "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition",
                       active
-                        ? "bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/40"
-                        : "text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                        ? "bg-blue-500/15 text-blue-700 ring-1 ring-blue-500/30 dark:text-blue-300 dark:ring-blue-500/40"
+                        : "text-muted-foreground hover:bg-background hover:text-foreground"
                     )}
                   >
                     <Icon className="size-4" />
@@ -147,8 +154,8 @@ export default function NavBar() {
                     className={cn(
                       "rounded-full px-3 py-1.5 transition",
                       active
-                        ? "bg-zinc-700 font-semibold text-white"
-                        : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                        ? "bg-muted font-semibold text-foreground"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     )}
                   >
                     {link.label}
@@ -157,14 +164,16 @@ export default function NavBar() {
               })}
             </nav>
 
+            <ThemeToggle />
+
             {role ? (
-              <div className="inline-flex items-center rounded-full border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-400">
+              <div className="inline-flex items-center rounded-full border border-border bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
                 Role: {role}
               </div>
             ) : null}
             <button
               onClick={signOut}
-              className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-200 shadow-sm transition hover:bg-zinc-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500"
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-muted px-4 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <LogOut className="size-4" />
               Log Out

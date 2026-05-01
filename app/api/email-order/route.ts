@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDistributorFromBrand } from "@/lib/inventory/distributors";
+import { UNKNOWN_DISTRIBUTOR, resolveDistributorBrand } from "@/lib/inventory/distributors";
 import { createClient } from "@/lib/supabase/server";
 import {
   getCreditExportFields,
@@ -81,8 +81,10 @@ export async function POST(request: Request) {
       lines?.map((line) => {
         const product = productMap.get(line.product_id);
         const brand = product?.brand_name || "";
-        const distributor =
-          getDistributorFromBrand(brand) ?? product?.distro ?? "Unknown Distributor";
+        const resolution = resolveDistributorBrand(brand, product?.distro);
+        const distributor = resolution?.review_required
+          ? UNKNOWN_DISTRIBUTOR
+          : resolution?.distributor ?? UNKNOWN_DISTRIBUTOR;
         const creditFields = getCreditExportFields(creditTotals, distributor, brand);
 
         return {

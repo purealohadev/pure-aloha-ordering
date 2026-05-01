@@ -16,10 +16,14 @@ export default async function OrderDetailPage({
 
   if (!user) {
     return (
-      <main style={{ padding: 24 }}>
-        <h1>Order Detail</h1>
-        <p>Not logged in.</p>
-        <Link href="/login">Go to login</Link>
+      <main className="min-h-screen bg-background p-6 text-foreground">
+        <div className="mx-auto max-w-xl rounded-xl border border-border bg-card p-6 shadow-sm">
+          <h1 className="text-2xl font-semibold tracking-tight">Order Detail</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Not logged in.</p>
+          <Link className="mt-4 inline-flex text-sm font-medium text-blue-600 dark:text-blue-400" href="/login">
+            Go to login
+          </Link>
+        </div>
       </main>
     );
   }
@@ -39,7 +43,11 @@ export default async function OrderDetailPage({
   if (orderError || !order) {
     return (
       <PageShell title="Order Detail" subtitle="Order not found.">
-        <p><Link href="/order-history">← Back to Order History</Link></p>
+        <p>
+          <Link className="font-medium text-blue-600 hover:underline dark:text-blue-400" href="/order-history">
+            Back to Order History
+          </Link>
+        </p>
       </PageShell>
     );
   }
@@ -47,7 +55,11 @@ export default async function OrderDetailPage({
   if (profile?.role === "buyer" && order.created_by !== user.id) {
     return (
       <PageShell title="Order Detail" subtitle="You do not have access to this order.">
-        <p><Link href="/order-history">← Back to Order History</Link></p>
+        <p>
+          <Link className="font-medium text-blue-600 hover:underline dark:text-blue-400" href="/order-history">
+            Back to Order History
+          </Link>
+        </p>
       </PageShell>
     );
   }
@@ -83,31 +95,21 @@ export default async function OrderDetailPage({
       title="Order Detail"
       subtitle="Review line items, status, approval history, and export approved orders."
     >
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
-        <Link href="/order-history" style={secondaryBtn}>
-          ← Back to Order History
+      <div className="mb-5 flex flex-wrap gap-2">
+        <Link href="/order-history" className={secondaryBtnClass}>
+          Back to Order History
         </Link>
 
         {order.status === "approved" ? (
-          <a
-            href={`/api/export-order/${order.id}`}
-            style={primaryBtn}
-          >
+          <a href={`/api/export-order/${order.id}`} className={primaryBtnClass}>
             Export Approved Order
           </a>
         ) : (
-          <span style={disabledBtn}>Export available after approval</span>
+          <span className={disabledBtnClass}>Export available after approval</span>
         )}
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          marginBottom: 24,
-        }}
-      >
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <InfoCard label="Order ID" value={order.id} />
         <InfoCard label="Status" value={order.status} />
         <InfoCard label="Created" value={order.created_at} />
@@ -115,42 +117,40 @@ export default async function OrderDetailPage({
         <InfoCard label="Total Value" value={`$${totalValue.toFixed(2)}`} />
       </div>
 
-      <div style={noteCard}>
+      <div className="mb-5 rounded-lg border border-border bg-muted/40 p-3 text-sm">
         <strong>Manager Note:</strong> {order.manager_note ?? "-"}
       </div>
 
       {linesError ? (
-        <div style={errorBox}>
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-            {JSON.stringify(linesError, null, 2)}
-          </pre>
+        <div className="mb-5 rounded-lg border border-red-500/35 bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-300">
+          <pre className="m-0 whitespace-pre-wrap">{JSON.stringify(linesError, null, 2)}</pre>
         </div>
       ) : null}
 
-      <h2 style={sectionTitle}>Line Items</h2>
-      <div style={tableWrap}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-          <thead style={{ background: "#f8fafc" }}>
+      <h2 className={sectionTitleClass}>Line Items</h2>
+      <div className={tableWrapClass}>
+        <table className="w-full min-w-[1000px] border-collapse text-sm">
+          <thead className="bg-muted/70 text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
-              <th style={th}>Brand</th>
-              <th style={th}>Product</th>
-              <th style={th}>Category</th>
-              <th style={th}>Distro</th>
-              <th style={th}>Qty</th>
-              <th style={th}>Unit Price</th>
-              <th style={th}>Line Total</th>
+              <th className={thClass}>Brand</th>
+              <th className={thClass}>Product</th>
+              <th className={thClass}>Category</th>
+              <th className={thClass}>Distro</th>
+              <th className={thClass}>Qty</th>
+              <th className={thClass}>Unit Price</th>
+              <th className={thClass}>Line Total</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-border">
             {(lines ?? []).map((line: any) => (
-              <tr key={line.id}>
-                <td style={td}>{line.products?.brand_name ?? "-"}</td>
-                <td style={td}>{line.products?.product_name ?? "-"}</td>
-                <td style={td}>{line.products?.category ?? "-"}</td>
-                <td style={td}>{line.products?.distro ?? "-"}</td>
-                <td style={td}>{line.order_qty}</td>
-                <td style={td}>${Number(line.unit_price ?? 0).toFixed(2)}</td>
-                <td style={td}>
+              <tr key={line.id} className="transition hover:bg-muted/40">
+                <td className={tdClass}>{line.products?.brand_name ?? "-"}</td>
+                <td className={tdClass}>{line.products?.product_name ?? "-"}</td>
+                <td className={tdClass}>{line.products?.category ?? "-"}</td>
+                <td className={tdClass}>{line.products?.distro ?? "-"}</td>
+                <td className={tdClass}>{line.order_qty}</td>
+                <td className={tdClass}>${Number(line.unit_price ?? 0).toFixed(2)}</td>
+                <td className={tdClass}>
                   ${(Number(line.order_qty ?? 0) * Number(line.unit_price ?? 0)).toFixed(2)}
                 </td>
               </tr>
@@ -159,22 +159,22 @@ export default async function OrderDetailPage({
         </table>
       </div>
 
-      <h2 style={sectionTitle}>Approval History</h2>
-      <div style={tableWrap}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
-          <thead style={{ background: "#f8fafc" }}>
+      <h2 className={sectionTitleClass}>Approval History</h2>
+      <div className={tableWrapClass}>
+        <table className="w-full min-w-[700px] border-collapse text-sm">
+          <thead className="bg-muted/70 text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
-              <th style={th}>Action</th>
-              <th style={th}>Note</th>
-              <th style={th}>When</th>
+              <th className={thClass}>Action</th>
+              <th className={thClass}>Note</th>
+              <th className={thClass}>When</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-border">
             {(history ?? []).map((item) => (
-              <tr key={item.id}>
-                <td style={td}>{item.action}</td>
-                <td style={td}>{item.note ?? "-"}</td>
-                <td style={td}>{item.created_at}</td>
+              <tr key={item.id} className="transition hover:bg-muted/40">
+                <td className={tdClass}>{item.action}</td>
+                <td className={tdClass}>{item.note ?? "-"}</td>
+                <td className={tdClass}>{item.created_at}</td>
               </tr>
             ))}
           </tbody>
@@ -186,87 +186,20 @@ export default async function OrderDetailPage({
 
 function InfoCard({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 14,
-        padding: 18,
-        background: "#f8fafc",
-      }}
-    >
-      <div style={{ color: "#64748b", fontSize: 14 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, marginTop: 8 }}>{value}</div>
+    <div className="rounded-xl border border-border bg-background/60 p-4 shadow-sm">
+      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="mt-1 text-base font-semibold tracking-tight text-foreground">{value}</div>
     </div>
   );
 }
 
-const tableWrap = {
-  overflowX: "auto" as const,
-  border: "1px solid #e5e7eb",
-  borderRadius: 12,
-};
-
-const sectionTitle = {
-  marginTop: 24,
-  marginBottom: 12,
-};
-
-const noteCard = {
-  marginBottom: 18,
-  padding: 12,
-  borderRadius: 10,
-  background: "#f8fafc",
-  border: "1px solid #e5e7eb",
-};
-
-const errorBox = {
-  marginBottom: 18,
-  padding: 12,
-  borderRadius: 10,
-  background: "#fee2e2",
-  border: "1px solid #fecaca",
-  color: "#991b1b",
-};
-
-const th = {
-  borderBottom: "1px solid #ddd",
-  textAlign: "left" as const,
-  padding: "12px 10px",
-  fontSize: 14,
-};
-
-const td = {
-  borderBottom: "1px solid #eee",
-  padding: "10px",
-  fontSize: 14,
-};
-
-const primaryBtn = {
-  display: "inline-block",
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "1px solid #0f172a",
-  background: "#0f172a",
-  color: "#fff",
-  textDecoration: "none",
-};
-
-const secondaryBtn = {
-  display: "inline-block",
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "1px solid #cbd5e1",
-  background: "#fff",
-  color: "#0f172a",
-  textDecoration: "none",
-};
-
-const disabledBtn = {
-  display: "inline-block",
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "1px solid #e5e7eb",
-  background: "#f8fafc",
-  color: "#64748b",
-};
-
+const tableWrapClass = "overflow-x-auto rounded-xl border border-border";
+const sectionTitleClass = "mb-3 mt-6 text-base font-semibold text-foreground";
+const thClass = "border-b border-border px-3 py-3 text-left font-semibold";
+const tdClass = "px-3 py-3 text-foreground";
+const primaryBtnClass =
+  "inline-flex items-center rounded-lg border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90";
+const secondaryBtnClass =
+  "inline-flex items-center rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-muted";
+const disabledBtnClass =
+  "inline-flex items-center rounded-lg border border-border bg-muted px-3 py-2 text-sm font-medium text-muted-foreground";

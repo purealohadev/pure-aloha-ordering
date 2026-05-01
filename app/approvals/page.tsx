@@ -111,33 +111,42 @@ export default function ApprovalsPage() {
 
   if (loading) {
     return (
-      <div className="p-6 text-white bg-zinc-900 min-h-screen">Loading...</div>
+      <div className="min-h-screen bg-background p-6 text-foreground">Loading...</div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-900 text-white">
+    <div className="min-h-screen bg-background text-foreground">
       <NavBar />
 
-      <div className="p-6 space-y-6">
-        <h1 className="text-xl font-semibold">Approvals</h1>
+      <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        <div className="border-b border-border pb-4">
+          <h1 className="text-2xl font-semibold tracking-tight text-blue-600 dark:text-blue-400">
+            Approvals
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Review submitted orders and export approved vendor packets.
+          </p>
+        </div>
 
         {/* SUBMITTED */}
-        <div>
-          <h2 className="text-lg mb-2 text-zinc-400">Submitted Orders</h2>
+        <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+          <h2 className="mb-3 text-base font-semibold text-foreground">Submitted Orders</h2>
 
           {submitted.length === 0 && (
-            <div className="text-zinc-500">No submitted orders.</div>
+            <div className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
+              No submitted orders.
+            </div>
           )}
 
           {submitted.map((order) => (
             <div
               key={order.id}
-              className="bg-zinc-800 p-4 rounded flex justify-between items-center mb-2"
+              className="mb-2 flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between"
             >
               <div>
-                <div className="font-semibold">{order.id}</div>
-                <div className="text-xs text-zinc-500">
+                <div className="font-semibold text-foreground">{order.id}</div>
+                <div className="text-xs text-muted-foreground">
                   {new Date(order.created_at).toLocaleString()}
                 </div>
               </div>
@@ -152,7 +161,7 @@ export default function ApprovalsPage() {
 
                 <Button
                   variant="outline"
-                  className="border-red-500 text-red-500 hover:bg-red-500 hover:text-white"
+                  className="border-red-500/50 text-red-600 hover:bg-red-500 hover:text-red-50 dark:text-red-400"
                   onClick={() => rejectOrder(order.id)}
                 >
                   Reject
@@ -160,24 +169,26 @@ export default function ApprovalsPage() {
               </div>
             </div>
           ))}
-        </div>
+        </section>
 
         {/* APPROVED */}
-        <div>
-          <h2 className="text-lg mb-2 text-zinc-400">Approved Orders</h2>
+        <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+          <h2 className="mb-3 text-base font-semibold text-foreground">Approved Orders</h2>
 
           {approved.length === 0 && (
-            <div className="text-zinc-500">No approved orders.</div>
+            <div className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
+              No approved orders.
+            </div>
           )}
 
           {approved.map((order) => (
             <div
               key={order.id}
-              className="bg-zinc-800 p-4 rounded flex justify-between items-center mb-2"
+              className="mb-2 flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between"
             >
               <div>
-                <div className="font-semibold">{order.id}</div>
-                <div className="text-xs text-zinc-500">
+                <div className="font-semibold text-foreground">{order.id}</div>
+                <div className="text-xs text-muted-foreground">
                   {new Date(order.created_at).toLocaleString()}
                 </div>
               </div>
@@ -185,7 +196,7 @@ export default function ApprovalsPage() {
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  className="bg-zinc-800 text-white border-zinc-700 hover:bg-zinc-700"
+                  className="border-border bg-background text-foreground hover:bg-muted"
                   onClick={() => {
                     window.location.href = `/api/export-order?order_id=${encodeURIComponent(
                       order.id
@@ -207,7 +218,7 @@ export default function ApprovalsPage() {
               </div>
             </div>
           ))}
-        </div>
+        </section>
       </div>
     </div>
   );

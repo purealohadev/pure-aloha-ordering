@@ -1,0 +1,33 @@
+distributor,brand,match_type,confidence,notes
+KSS,Kiva,hard,high,
+KSS,Pacific Stone,soft,medium,"Can also appear under Nabis depending on SKU/feed"
+KSS,Garden Society,hard,high,
+KSS,Seed Junky,hard,high,
+KSS,Uncle Arnie's,hard,high,
+KSS,Arcata Fire,soft,medium,"Can also appear under Nabis"
+KSS,Nasha,hard,high,
+KSS,CANN,hard,high,
+KSS,The Tablet,soft,medium,"Verify against live product feed"
+KSS,Emerald Sky,hard,high,
+KSS,Gelato,soft,low,"Brand/name overlap; verify before auto-assigning"
+KSS,Keef,hard,high,
+KSS,Level,hard,high,
+KSS,Big Pete's,hard,high,
+KSS,Autumn Brands,hard,high,
+KSS,Pax Labs,hard,high,
+KSS,The Pairist,hard,high,
+KSS,CLSICS,hard,high,
+KSS,El Blunto,hard,high,
+KSS,PRESHA,hard,high,
+KSS,Tiny Fires,hard,high,
+KSS,Awesome Dope,hard,high,
+KSS,Ultra,hard,high,
+KSS,Northern Harvest,hard,high,
+KSS,Saida,soft,low,"Verify before auto-assigning"
+Kindhouse,CannaCraft,hard,high,
+Kindhouse,ABX,hard,high,
+Kindhouse,Farmer and the Felon,hard,high,
+Kindhouse,Care By Design,hard,high,
+Kindhouse,Humboldt Terp Council,hard,high,
+Kindhouse,Loud + Clear,hard,high,
+Kindhouse,Lagunitas Hi-Fi Sessions,hard,high,

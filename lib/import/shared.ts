@@ -15,6 +15,11 @@ export type UnmatchedInventoryRow = {
   name: string;
   inventory: number;
   reorder_point: number;
+  suggested_distributor?: string | null;
+  match_type?: "hard" | "soft" | null;
+  confidence?: "high" | "medium" | "low" | null;
+  review_required?: boolean;
+  notes?: string | null;
 };
 
 export function normalizeHeader(value: unknown) {

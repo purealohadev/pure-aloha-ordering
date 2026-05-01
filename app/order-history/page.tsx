@@ -1,44 +1,18 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import PageShell from "@/components/PageShell";
+import { cn } from "@/lib/utils";
 
-function getStatusStyle(status: string) {
+function getStatusClass(status: string) {
   if (status === "approved") {
-    return {
-      background: "rgba(34, 197, 94, 0.12)",
-      color: "#4ade80",
-      border: "1px solid rgba(34, 197, 94, 0.35)",
-      padding: "4px 8px",
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      display: "inline-block",
-    };
+    return "border-green-500/35 bg-green-500/10 text-green-700 dark:text-green-300";
   }
 
   if (status === "rejected") {
-    return {
-      background: "rgba(239, 68, 68, 0.12)",
-      color: "#f87171",
-      border: "1px solid rgba(239, 68, 68, 0.35)",
-      padding: "4px 8px",
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      display: "inline-block",
-    };
+    return "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-300";
   }
 
-  return {
-    background: "rgba(234, 179, 8, 0.12)",
-    color: "#facc15",
-    border: "1px solid rgba(234, 179, 8, 0.35)",
-    padding: "4px 8px",
-    borderRadius: 999,
-    fontSize: 12,
-    fontWeight: 700,
-    display: "inline-block",
-  };
+  return "border-yellow-500/35 bg-yellow-500/10 text-yellow-700 dark:text-yellow-300";
 }
 
 export default async function OrderHistoryPage() {
@@ -50,10 +24,14 @@ export default async function OrderHistoryPage() {
 
   if (!user) {
     return (
-      <main style={{ minHeight: "100vh", padding: 24, background: "#18181b", color: "#fff" }}>
-        <h1>Order History</h1>
-        <p>Not logged in.</p>
-        <Link href="/login">Go to login</Link>
+      <main className="min-h-screen bg-background p-6 text-foreground">
+        <div className="mx-auto max-w-xl rounded-xl border border-border bg-card p-6 shadow-sm">
+          <h1 className="text-2xl font-semibold tracking-tight">Order History</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Not logged in.</p>
+          <Link className="mt-4 inline-flex text-sm font-medium text-blue-600 dark:text-blue-400" href="/login">
+            Go to login
+          </Link>
+        </div>
       </main>
     );
   }
@@ -84,14 +62,7 @@ export default async function OrderHistoryPage() {
       title="Order History"
       subtitle="Review all saved orders, statuses, timestamps, and approved exports."
     >
-      <div
-        style={{
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          marginBottom: 24,
-        }}
-      >
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Role" value={profile?.role ?? "unknown"} />
         <StatCard label="Submitted" value={String(submittedCount)} />
         <StatCard label="Approved" value={String(approvedCount)} />
@@ -99,59 +70,51 @@ export default async function OrderHistoryPage() {
       </div>
 
       {error ? (
-        <div
-          style={{
-          marginBottom: 18,
-          padding: 12,
-          borderRadius: 10,
-          background: "rgba(239, 68, 68, 0.12)",
-          border: "1px solid rgba(239, 68, 68, 0.35)",
-          color: "#f87171",
-        }}
-      >
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-            {JSON.stringify(error, null, 2)}
-          </pre>
+        <div className="mb-5 rounded-lg border border-red-500/35 bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-300">
+          <pre className="m-0 whitespace-pre-wrap">{JSON.stringify(error, null, 2)}</pre>
         </div>
       ) : null}
 
-      <div
-        style={{
-          overflowX: "auto",
-          border: "1px solid #3f3f46",
-          borderRadius: 12,
-        }}
-      >
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
-          <thead style={{ background: "#18181b" }}>
+      <div className="overflow-x-auto rounded-xl border border-border">
+        <table className="w-full min-w-[1100px] border-collapse text-sm">
+          <thead className="bg-muted/70 text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
-              <th style={th}>Order ID</th>
-              <th style={th}>Status</th>
-              <th style={th}>Created</th>
-              <th style={th}>Approved</th>
-              <th style={th}>Manager Note</th>
-              <th style={th}>Open</th>
-              <th style={th}>Export</th>
+              <th className={thClass}>Order ID</th>
+              <th className={thClass}>Status</th>
+              <th className={thClass}>Created</th>
+              <th className={thClass}>Approved</th>
+              <th className={thClass}>Manager Note</th>
+              <th className={thClass}>Open</th>
+              <th className={thClass}>Export</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-border">
             {(orders ?? []).map((order) => (
-              <tr key={order.id}>
-                <td style={td}>{order.id}</td>
-                <td style={td}>
-                  <span style={getStatusStyle(order.status)}>
+              <tr key={order.id} className="transition hover:bg-muted/40">
+                <td className={tdClass}>{order.id}</td>
+                <td className={tdClass}>
+                  <span
+                    className={cn(
+                      "inline-flex rounded-full border px-2 py-1 text-xs font-bold",
+                      getStatusClass(order.status)
+                    )}
+                  >
                     {order.status}
                   </span>
                 </td>
-                <td style={td}>{order.created_at}</td>
-                <td style={td}>{order.approved_at ?? "-"}</td>
-                <td style={td}>{order.manager_note ?? "-"}</td>
-                <td style={td}>
-                  <Link href={`/order-history/${order.id}`}>View</Link>
+                <td className={tdClass}>{order.created_at}</td>
+                <td className={tdClass}>{order.approved_at ?? "-"}</td>
+                <td className={tdClass}>{order.manager_note ?? "-"}</td>
+                <td className={tdClass}>
+                  <Link className="font-medium text-blue-600 hover:underline dark:text-blue-400" href={`/order-history/${order.id}`}>
+                    View
+                  </Link>
                 </td>
-                <td style={td}>
+                <td className={tdClass}>
                   {order.status === "approved" ? (
-                    <a href={`/api/export-order/${order.id}`}>Export CSV</a>
+                    <a className="font-medium text-blue-600 hover:underline dark:text-blue-400" href={`/api/export-order/${order.id}`}>
+                      Export CSV
+                    </a>
                   ) : (
                     "-"
                   )}
@@ -167,31 +130,12 @@ export default async function OrderHistoryPage() {
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      style={{
-        border: "1px solid #3f3f46",
-        borderRadius: 14,
-        padding: 18,
-        background: "#18181b",
-      }}
-    >
-      <div style={{ color: "#a1a1aa", fontSize: 14 }}>{label}</div>
-      <div style={{ color: "#fff", fontSize: 30, fontWeight: 700, marginTop: 8 }}>{value}</div>
+    <div className="rounded-xl border border-border bg-background/60 p-4 shadow-sm">
+      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-tight text-foreground">{value}</div>
     </div>
   );
 }
 
-const th = {
-  borderBottom: "1px solid #3f3f46",
-  color: "#a1a1aa",
-  textAlign: "left" as const,
-  padding: "12px 10px",
-  fontSize: 14,
-};
-
-const td = {
-  borderBottom: "1px solid #3f3f46",
-  color: "#e4e4e7",
-  padding: "10px",
-  fontSize: 14,
-};
+const thClass = "border-b border-border px-3 py-3 text-left font-semibold";
+const tdClass = "px-3 py-3 text-foreground";

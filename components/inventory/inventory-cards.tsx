@@ -16,9 +16,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import SuggestedDistributor from "@/components/SuggestedDistributor"
+import { createClient } from "@/lib/supabase/client"
 import {
+  ACCESSORIES_GROUP_NAME,
   DISTRIBUTOR_ORDER_INDEX,
-  getDisplayDistributorName,
+  UNKNOWN_DISTRIBUTOR,
+  isNonConsumableCategory,
+  resolveDistributorBrand,
 } from "@/lib/inventory/distributors"
 import { cn } from "@/lib/utils"
 
@@ -32,6 +37,7 @@ export type InventoryItem = {
   price: number | null
   inventory: number | null
   low_stock_threshold?: number | null
+  distributor_locked?: boolean | null
   image_url?: string | null
 }
 
@@ -46,13 +52,38 @@ type BrandGroup = {
   items: InventoryItem[]
 }
 
+type ProductTypeGroup = {
+  name: string
+  items: InventoryItem[]
+}
+
 type DistributorGroup = {
   name: string
   itemsCount: number
   brands: BrandGroup[]
 }
 
+type AcceptedBrandDistributorMap = Record<string, string>
+type LockedBrandMap = Record<string, boolean>
+type SaveStatusTone = "success" | "error"
+type SaveStatus = {
+  tone: SaveStatusTone
+  text: string
+} | null
+
+const DISTRIBUTOR_OPTIONS = [
+  "KSS",
+  "Nabis",
+  "Kindhouse",
+  "UpNorth",
+  "Big Oil",
+  "Self Distro",
+  "Other",
+  UNKNOWN_DISTRIBUTOR,
+]
+const SUMMARY_DISTRIBUTORS = DISTRIBUTOR_OPTIONS
 const UNKNOWN_BRAND = "Unknown Brand"
+const PRODUCT_TYPE_ORDER = ["Badder", "Sauce & Diamonds", "Live Resin", "Rosin", "Edibles", "Other"]
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -62,6 +93,31 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 function displayGroupName(value: string | null | undefined, fallback: string) {
   const trimmed = value?.trim()
   return trimmed && trimmed.length > 0 ? trimmed : fallback
+}
+
+function getNormalizedBrandName(value: string | null | undefined) {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed.toLowerCase() : null
+}
+
+function getSummaryDistributorName(distributorName: string) {
+  return SUMMARY_DISTRIBUTORS.includes(distributorName)
+    ? distributorName
+    : "Other"
+}
+
+function getInitialLockedBrands(items: InventoryItem[]) {
+  const lockedBrands: LockedBrandMap = {}
+
+  for (const item of items) {
+    const brandKey = getNormalizedBrandName(item.brand)
+
+    if (brandKey) {
+      lockedBrands[brandKey] = lockedBrands[brandKey] || Boolean(item.distributor_locked)
+    }
+  }
+
+  return lockedBrands
 }
 
 function getCompactDisplayName(productName: string, brandName: string) {
@@ -87,11 +143,152 @@ function getCompactDisplayName(productName: string, brandName: string) {
     : productName
 }
 
-function groupItemsByDistributorAndBrand(items: InventoryItem[]): DistributorGroup[] {
+function getProductType(productName: string) {
+  const normalizedName = productName.toLowerCase()
+
+  if (normalizedName.includes("badder")) {
+    return "Badder"
+  }
+
+  if (normalizedName.includes("sauce") || normalizedName.includes("diamonds")) {
+    return "Sauce & Diamonds"
+  }
+
+  if (normalizedName.includes("live")) {
+    return "Live Resin"
+  }
+
+  if (normalizedName.includes("rosin")) {
+    return "Rosin"
+  }
+
+  if (
+    /\b(gummy|gummies|edible|edibles|chocolate|cookie|cookies|candy|mints|tablet|tablets|drink|beverage|syrup)\b/.test(
+      normalizedName
+    )
+  ) {
+    return "Edibles"
+  }
+
+  return "Other"
+}
+
+function groupItemsByProductType(items: InventoryItem[]): ProductTypeGroup[] {
+  const productTypeMap = new Map<string, InventoryItem[]>()
+
+  for (const item of items) {
+    const productType = getProductType(item.name)
+    const productTypeItems = productTypeMap.get(productType) ?? []
+
+    productTypeItems.push(item)
+    productTypeMap.set(productType, productTypeItems)
+  }
+
+  return Array.from(productTypeMap.entries())
+    .map(([name, productTypeItems]) => ({
+      name,
+      items: productTypeItems.sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => {
+      const aOrder = PRODUCT_TYPE_ORDER.indexOf(a.name)
+      const bOrder = PRODUCT_TYPE_ORDER.indexOf(b.name)
+
+      return aOrder - bOrder
+    })
+}
+
+function getEffectiveDistributorName(
+  item: InventoryItem,
+  acceptedBrandDistributors: AcceptedBrandDistributorMap
+) {
+  const brandKey = getNormalizedBrandName(item.brand)
+  const acceptedDistributor = brandKey ? acceptedBrandDistributors[brandKey]?.trim() : null
+
+  if (acceptedDistributor) {
+    return acceptedDistributor
+  }
+
+  if (isNonConsumableCategory(item.category)) {
+    return ACCESSORIES_GROUP_NAME
+  }
+
+  const resolution = resolveDistributorBrand(item.brand, item.distributor)
+
+  if (
+    !item.distributor?.trim() &&
+    resolution?.match_type === "soft" &&
+    resolution.confidence === "medium"
+  ) {
+    return UNKNOWN_DISTRIBUTOR
+  }
+
+  if (resolution?.review_required) return UNKNOWN_DISTRIBUTOR
+
+  return resolution?.distributor ?? UNKNOWN_DISTRIBUTOR
+}
+
+function getSuggestedDistributor(
+  item: InventoryItem,
+  acceptedBrandDistributors: AcceptedBrandDistributorMap,
+  lockedBrands: LockedBrandMap
+) {
+  const brandKey = getNormalizedBrandName(item.brand)
+
+  if (brandKey && lockedBrands[brandKey]) {
+    return null
+  }
+
+  if ((brandKey && acceptedBrandDistributors[brandKey]?.trim()) || item.distributor?.trim()) {
+    return null
+  }
+
+  const resolution = resolveDistributorBrand(item.brand, null)
+
+  return resolution?.match_type === "soft" &&
+    resolution.confidence === "medium" &&
+    resolution.distributor
+    ? resolution.distributor
+    : null
+}
+
+function getEditableDistributorValue(
+  item: InventoryItem,
+  acceptedBrandDistributors: AcceptedBrandDistributorMap
+) {
+  const brandKey = getNormalizedBrandName(item.brand)
+  const acceptedDistributor = brandKey ? acceptedBrandDistributors[brandKey]?.trim() : null
+
+  if (acceptedDistributor) {
+    return acceptedDistributor
+  }
+
+  const savedDistributor = item.distributor?.trim()
+
+  if (savedDistributor) {
+    return savedDistributor
+  }
+
+  const resolution = resolveDistributorBrand(item.brand, null)
+
+  if (
+    resolution &&
+    !resolution.review_required &&
+    !(resolution.match_type === "soft" && resolution.confidence === "medium")
+  ) {
+    return resolution.distributor
+  }
+
+  return ""
+}
+
+function groupItemsByDistributorAndBrand(
+  items: InventoryItem[],
+  acceptedBrandDistributors: AcceptedBrandDistributorMap
+): DistributorGroup[] {
   const distributorMap = new Map<string, Map<string, InventoryItem[]>>()
 
   for (const item of items) {
-    const distributorName = getDisplayDistributorName(item)
+    const distributorName = getEffectiveDistributorName(item, acceptedBrandDistributors)
     const brandName = displayGroupName(item.brand, UNKNOWN_BRAND)
     const brandMap = distributorMap.get(distributorName) ?? new Map<string, InventoryItem[]>()
     const brandItems = brandMap.get(brandName) ?? []
@@ -137,7 +334,7 @@ function stockTone(inventory: number, threshold: number) {
       label: "Out of stock",
       badgeClass: "border-red-500/40 bg-red-500/10 text-red-400",
       textClass: "text-red-400",
-      panelClass: "border-zinc-700 bg-zinc-900",
+      panelClass: "border-border bg-background",
     }
   }
 
@@ -146,7 +343,7 @@ function stockTone(inventory: number, threshold: number) {
       label: "Low stock",
       badgeClass: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400",
       textClass: "text-yellow-400",
-      panelClass: "border-zinc-700 bg-zinc-900",
+      panelClass: "border-border bg-background",
     }
   }
 
@@ -155,15 +352,15 @@ function stockTone(inventory: number, threshold: number) {
       label: "In stock",
       badgeClass: "border-green-500/40 bg-green-500/10 text-green-400",
       textClass: "text-green-400",
-      panelClass: "border-zinc-700 bg-zinc-900",
+      panelClass: "border-border bg-background",
     }
   }
 
   return {
     label: "At par",
-    badgeClass: "border-zinc-600 bg-zinc-900 text-zinc-300",
-    textClass: "text-zinc-300",
-    panelClass: "border-zinc-700 bg-zinc-900",
+    badgeClass: "border-border bg-background text-foreground",
+    textClass: "text-foreground",
+    panelClass: "border-border bg-background",
   }
 }
 
@@ -175,7 +372,7 @@ export default function InventoryCards({ items }: Props) {
   const [collapsedDistributors, setCollapsedDistributors] = useState<Record<string, boolean>>({})
   const [collapsedBrands, setCollapsedBrands] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
-      groupItemsByDistributorAndBrand(items).flatMap((distributorGroup) =>
+      groupItemsByDistributorAndBrand(items, {}).flatMap((distributorGroup) =>
         distributorGroup.brands.map((brandGroup) => [
           `${distributorGroup.name}::${brandGroup.name}`,
           true,
@@ -187,6 +384,15 @@ export default function InventoryCards({ items }: Props) {
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [addingId, setAddingId] = useState<string | null>(null)
   const [message, setMessage] = useState<Record<string, string>>({})
+  const [acceptedBrandDistributors, setAcceptedBrandDistributors] =
+    useState<AcceptedBrandDistributorMap>({})
+  const [lockedBrands, setLockedBrands] = useState<LockedBrandMap>(() =>
+    getInitialLockedBrands(items)
+  )
+  const [savingBrandKeys, setSavingBrandKeys] = useState<Record<string, boolean>>({})
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>(null)
+
+  const supabase = useMemo(() => createClient(), [])
 
   const categories = useMemo(() => {
     return [
@@ -212,6 +418,10 @@ export default function InventoryCards({ items }: Props) {
         item.name?.toLowerCase().includes(q) ||
         item.brand?.toLowerCase().includes(q) ||
         item.distributor?.toLowerCase().includes(q) ||
+        getEffectiveDistributorName(item, acceptedBrandDistributors).toLowerCase().includes(q) ||
+        getSuggestedDistributor(item, acceptedBrandDistributors, lockedBrands)
+          ?.toLowerCase()
+          .includes(q) ||
         item.category?.toLowerCase().includes(q) ||
         item.sku?.toLowerCase().includes(q)
 
@@ -225,11 +435,28 @@ export default function InventoryCards({ items }: Props) {
 
       return matchesQuery && matchesCategory && matchesStock
     })
-  }, [items, query, category, stockFilter])
+  }, [items, query, category, stockFilter, acceptedBrandDistributors, lockedBrands])
 
   const groupedItems = useMemo(() => {
-    return groupItemsByDistributorAndBrand(filteredItems)
-  }, [filteredItems])
+    return groupItemsByDistributorAndBrand(filteredItems, acceptedBrandDistributors)
+  }, [filteredItems, acceptedBrandDistributors])
+
+  const distributorSummary = useMemo(() => {
+    const summary = new Map(SUMMARY_DISTRIBUTORS.map((distributor) => [distributor, 0]))
+
+    for (const item of filteredItems) {
+      const distributorName = getSummaryDistributorName(
+        getEffectiveDistributorName(item, acceptedBrandDistributors)
+      )
+
+      summary.set(distributorName, (summary.get(distributorName) ?? 0) + 1)
+    }
+
+    return SUMMARY_DISTRIBUTORS.map((name) => ({
+      name,
+      count: summary.get(name) ?? 0,
+    }))
+  }, [filteredItems, acceptedBrandDistributors])
 
   function matchesStockFilter(item: InventoryItem, value: typeof stockFilter) {
     const inventory = item.inventory ?? 0
@@ -247,7 +474,10 @@ export default function InventoryCards({ items }: Props) {
   }
 
   function getBrandKeyForItem(item: InventoryItem) {
-    return `${getDisplayDistributorName(item)}::${displayGroupName(item.brand, UNKNOWN_BRAND)}`
+    return `${getEffectiveDistributorName(item, acceptedBrandDistributors)}::${displayGroupName(
+      item.brand,
+      UNKNOWN_BRAND
+    )}`
   }
 
   function getMatchingBrandKeys({
@@ -270,6 +500,12 @@ export default function InventoryCards({ items }: Props) {
               item.name?.toLowerCase().includes(q) ||
               item.brand?.toLowerCase().includes(q) ||
               item.distributor?.toLowerCase().includes(q) ||
+              getEffectiveDistributorName(item, acceptedBrandDistributors)
+                .toLowerCase()
+                .includes(q) ||
+              getSuggestedDistributor(item, acceptedBrandDistributors, lockedBrands)
+                ?.toLowerCase()
+                .includes(q) ||
               item.category?.toLowerCase().includes(q) ||
               item.sku?.toLowerCase().includes(q)
 
@@ -363,6 +599,154 @@ export default function InventoryCards({ items }: Props) {
     }))
   }
 
+  async function toggleBrandLock(brandGroup: BrandGroup, locked: boolean) {
+    const sampleItem = brandGroup.items[0]
+    const brandKey = getNormalizedBrandName(sampleItem?.brand ?? brandGroup.name)
+
+    if (!brandKey) return
+
+    const brandName = displayGroupName(sampleItem?.brand ?? brandGroup.name, UNKNOWN_BRAND)
+    const affectedProductIds = items
+      .filter((candidate) => getNormalizedBrandName(candidate.brand) === brandKey)
+      .map((candidate) => candidate.id)
+
+    if (affectedProductIds.length === 0) return
+
+    const previousLocked = lockedBrands[brandKey] ?? false
+
+    setSaveStatus(null)
+    setSavingBrandKeys((prev) => ({
+      ...prev,
+      [brandKey]: true,
+    }))
+    setLockedBrands((prev) => ({
+      ...prev,
+      [brandKey]: locked,
+    }))
+
+    try {
+      const { error } = await supabase
+        .from("products")
+        .update({ distributor_locked: locked })
+        .in("id", affectedProductIds)
+
+      if (error) {
+        throw error
+      }
+
+      setSaveStatus({
+        tone: "success",
+        text: `${locked ? "Locked" : "Unlocked"} distributor for ${brandName}.`,
+      })
+    } catch (error) {
+      console.error("Failed to save distributor lock state", error)
+
+      setLockedBrands((prev) => ({
+        ...prev,
+        [brandKey]: previousLocked,
+      }))
+      setSaveStatus({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? `Could not ${locked ? "lock" : "unlock"} distributor for ${brandName}: ${error.message}`
+            : `Could not ${locked ? "lock" : "unlock"} distributor for ${brandName}.`,
+      })
+    } finally {
+      setSavingBrandKeys((prev) => ({
+        ...prev,
+        [brandKey]: false,
+      }))
+    }
+  }
+
+  async function acceptSuggestedDistributorForBrand(item: InventoryItem, distributor: string) {
+    const brandKey = getNormalizedBrandName(item.brand)
+
+    if (!brandKey) return
+
+    if (lockedBrands[brandKey]) return
+
+    const brandName = displayGroupName(item.brand, UNKNOWN_BRAND)
+    const affectedProductIds = items
+      .filter((candidate) => getNormalizedBrandName(candidate.brand) === brandKey)
+      .map((candidate) => candidate.id)
+
+    if (affectedProductIds.length === 0) return
+
+    const previousDistributorName = getEffectiveDistributorName(item, acceptedBrandDistributors)
+    const previousAcceptedDistributor = acceptedBrandDistributors[brandKey]
+    const previousBrandKey = `${previousDistributorName}::${brandName}`
+    const nextBrandKey = `${distributor}::${brandName}`
+
+    setSaveStatus(null)
+    setSavingBrandKeys((prev) => ({
+      ...prev,
+      [brandKey]: true,
+    }))
+    setAcceptedBrandDistributors((prev) => ({
+      ...prev,
+      [brandKey]: distributor,
+    }))
+    setCollapsedDistributors((prev) => ({
+      ...prev,
+      [distributor]: false,
+    }))
+    setCollapsedBrands((prev) => ({
+      ...prev,
+      [previousBrandKey]: false,
+      [nextBrandKey]: false,
+    }))
+
+    try {
+      const { error } = await supabase
+        .from("products")
+        .update({ distro: distributor })
+        .in("id", affectedProductIds)
+
+      if (error) {
+        throw error
+      }
+
+      setSaveStatus({
+        tone: "success",
+        text: `Saved ${distributor} for ${brandName}.`,
+      })
+    } catch (error) {
+      console.error("Failed to save distributor selection", error)
+
+      setAcceptedBrandDistributors((prev) => {
+        const next = { ...prev }
+
+        if (previousAcceptedDistributor) {
+          next[brandKey] = previousAcceptedDistributor
+        } else {
+          delete next[brandKey]
+        }
+
+        return next
+      })
+      setSaveStatus({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? `Could not save distributor for ${brandName}: ${error.message}`
+            : `Could not save distributor for ${brandName}.`,
+      })
+    } finally {
+      setSavingBrandKeys((prev) => ({
+        ...prev,
+        [brandKey]: false,
+      }))
+    }
+  }
+
+  function handleDistributorChange(item: InventoryItem, distributor: string) {
+    if (!distributor) return
+
+    void acceptSuggestedDistributorForBrand(item, distributor)
+  }
+
   async function addToOrder(item: InventoryItem) {
     const qty = getQty(item.id)
 
@@ -416,17 +800,37 @@ export default function InventoryCards({ items }: Props) {
     const isOut = inventory <= 0
     const isExpanded = isItemExpanded(item.id)
     const needsReorder = inventory < threshold
+    const brandKey = getNormalizedBrandName(item.brand)
+    const isBrandLocked = brandKey ? lockedBrands[brandKey] ?? false : false
+    const isSavingDistributor = brandKey ? savingBrandKeys[brandKey] ?? false : false
+    const suggestedDistributor = getSuggestedDistributor(
+      item,
+      acceptedBrandDistributors,
+      lockedBrands
+    )
+    const selectedDistributor = getEditableDistributorValue(item, acceptedBrandDistributors)
+    const distributorControlsDisabled = isSavingDistributor || isBrandLocked
+    const showBrandApplyHelper = !isBrandLocked
 
     if (!isExpanded) {
       return (
         <article
           key={item.id}
-          className="h-[80px] rounded-lg border border-zinc-700 bg-zinc-800 p-2 font-sans shadow-sm transition hover:bg-zinc-700"
+          className={cn(
+            suggestedDistributor
+              ? showBrandApplyHelper
+                ? "h-[150px]"
+                : "h-[132px]"
+              : showBrandApplyHelper
+                ? "h-[124px]"
+                : "h-[108px]",
+            "rounded-lg border border-border bg-card p-2 font-sans shadow-sm transition hover:bg-muted"
+          )}
         >
           <div className="flex h-full min-h-0 flex-col justify-between gap-1">
             <div className="flex min-w-0 items-start justify-between gap-1.5">
               <div className="min-w-0 flex-1">
-                <div className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
+                <div className="line-clamp-2 text-sm font-semibold leading-tight text-foreground">
                   {getCompactDisplayName(item.name, brandName)}
                 </div>
               </div>
@@ -434,7 +838,7 @@ export default function InventoryCards({ items }: Props) {
               <button
                 type="button"
                 onClick={() => toggleItemExpansion(item.id)}
-                className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-600 hover:text-white"
+                className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
                 aria-expanded={isExpanded}
                 aria-label={`Expand details for ${item.name}`}
               >
@@ -442,7 +846,7 @@ export default function InventoryCards({ items }: Props) {
               </button>
             </div>
 
-            <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-tight text-zinc-400">
+            <div className="flex min-w-0 items-center justify-between gap-1.5 text-xs leading-tight text-muted-foreground">
               <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap">
                 <span className={tone.textClass}>Inv {inventory}</span>
                 <span aria-hidden="true">·</span>
@@ -455,6 +859,26 @@ export default function InventoryCards({ items }: Props) {
                 productName={item.name}
               />
             </div>
+            <DistributorSelect
+              value={selectedDistributor}
+              disabled={distributorControlsDisabled}
+              productName={item.name}
+              onChange={(distributor) => handleDistributorChange(item, distributor)}
+              compact
+            />
+            {showBrandApplyHelper ? (
+              <p className="truncate text-[10px] leading-none text-muted-foreground">
+                Applies to all {brandName} items
+              </p>
+            ) : null}
+            {suggestedDistributor ? (
+              <SuggestedDistributor
+                distributor={suggestedDistributor}
+                disabled={distributorControlsDisabled}
+                showDropdown={false}
+                className="max-w-full gap-1.5 [&_[data-slot=badge]]:max-w-full [&_[data-slot=badge]]:truncate [&_[data-slot=badge]]:px-2 [&_[data-slot=badge]]:text-[10px]"
+              />
+            ) : null}
           </div>
         </article>
       )
@@ -467,14 +891,14 @@ export default function InventoryCards({ items }: Props) {
           viewMode === "compact"
             ? "sm:col-span-2 md:col-span-4 xl:col-span-5 2xl:col-span-6"
             : "",
-          "rounded-[1.5rem] border border-zinc-700 bg-zinc-800 font-sans shadow-sm"
+          "rounded-[1.5rem] border border-border bg-card font-sans shadow-sm"
         )}
       >
         <div className="flex flex-col gap-4 p-4 sm:p-5">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="line-clamp-2 text-sm font-semibold leading-tight text-zinc-100">
+                <h2 className="line-clamp-2 text-sm font-semibold leading-tight text-foreground">
                   {item.name}
                 </h2>
                 {needsReorder ? (
@@ -488,8 +912,15 @@ export default function InventoryCards({ items }: Props) {
                 <Badge variant="outline" className={cn("rounded-full", tone.badgeClass)}>
                   {tone.label}
                 </Badge>
+                {suggestedDistributor ? (
+                  <SuggestedDistributor
+                    distributor={suggestedDistributor}
+                    disabled={distributorControlsDisabled}
+                    showDropdown={false}
+                  />
+                ) : null}
               </div>
-              <p className="mt-1 text-xs leading-tight text-zinc-400">
+              <p className="mt-1 text-xs leading-tight text-muted-foreground">
                 {item.brand || UNKNOWN_BRAND}
               </p>
             </div>
@@ -497,7 +928,7 @@ export default function InventoryCards({ items }: Props) {
             <button
               type="button"
               onClick={() => toggleItemExpansion(item.id)}
-              className="inline-flex items-center gap-2 self-start rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-700 hover:text-white"
+              className="inline-flex items-center gap-2 self-start rounded-full border border-border bg-background px-3 py-2 text-sm font-medium text-foreground transition hover:bg-muted hover:text-foreground"
               aria-expanded={isExpanded}
               aria-label={`${isExpanded ? "Collapse" : "Expand"} details for ${item.name}`}
             >
@@ -507,6 +938,23 @@ export default function InventoryCards({ items }: Props) {
           </div>
 
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_170px_170px]">
+            <div className="rounded-2xl border border-border bg-background px-4 py-3 md:col-span-2 xl:col-span-1">
+              <div className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+                Distributor
+              </div>
+              <DistributorSelect
+                value={selectedDistributor}
+                disabled={distributorControlsDisabled}
+                productName={item.name}
+                onChange={(distributor) => handleDistributorChange(item, distributor)}
+                className="mt-2"
+              />
+              {showBrandApplyHelper ? (
+                <p className="mt-2 text-xs leading-tight text-muted-foreground">
+                  Applies to all {brandName} items
+                </p>
+              ) : null}
+            </div>
             <SummaryPanel
               label="Current Inventory"
               value={String(inventory)}
@@ -515,7 +963,7 @@ export default function InventoryCards({ items }: Props) {
             />
             <SummaryPanel label="Reorder Threshold" value={String(threshold)} />
             <div className={cn("rounded-2xl border px-4 py-3", tone.panelClass)}>
-              <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
+              <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
                 <Package2 className="h-3.5 w-3.5" />
                 Stock status
               </div>
@@ -527,7 +975,7 @@ export default function InventoryCards({ items }: Props) {
           </div>
 
           {isExpanded ? (
-            <div className="rounded-[1.35rem] border border-zinc-700 bg-zinc-900 p-4 sm:p-5">
+            <div className="rounded-[1.35rem] border border-border bg-background p-4 sm:p-5">
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 <DetailPanelItem label="Brand" value={item.brand || UNKNOWN_BRAND} />
                 <DetailPanelItem label="Category" value={item.category || "—"} />
@@ -543,13 +991,13 @@ export default function InventoryCards({ items }: Props) {
                 />
                 <DetailPanelItem label="Reorder Threshold" value={String(threshold)} />
 
-                <div className="rounded-2xl border border-zinc-700 bg-zinc-800 px-4 py-3 md:col-span-2 xl:col-span-2">
-                  <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
+                <div className="rounded-2xl border border-border bg-card px-4 py-3 md:col-span-2 xl:col-span-2">
+                  <div className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
                     Add to order
                   </div>
                   <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
                     <div className="sm:w-32">
-                      <label className="mb-1 block text-xs uppercase tracking-[0.04em] text-zinc-400">
+                      <label className="mb-1 block text-xs uppercase tracking-[0.04em] text-muted-foreground">
                         Qty to order
                       </label>
                       <Input
@@ -557,7 +1005,7 @@ export default function InventoryCards({ items }: Props) {
                         min={1}
                         value={getQty(item.id)}
                         onChange={(event) => setQty(item.id, event.target.value)}
-                        className="border-zinc-700 bg-zinc-900 font-sans text-white focus-visible:border-zinc-500"
+                        className="border-border bg-background font-sans text-foreground focus-visible:border-ring"
                       />
                     </div>
 
@@ -565,7 +1013,7 @@ export default function InventoryCards({ items }: Props) {
                       type="button"
                       onClick={() => addToOrder(item)}
                       disabled={isOut || addingId === item.id}
-                      className="border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-700 hover:text-white sm:min-w-40"
+                      className="border border-border bg-background text-foreground hover:bg-muted hover:text-foreground sm:min-w-40"
                     >
                       <ShoppingCart className="mr-2 h-4 w-4" />
                       {addingId === item.id ? "Adding..." : "Add to Order"}
@@ -573,7 +1021,7 @@ export default function InventoryCards({ items }: Props) {
                   </div>
 
                   {message[item.id] ? (
-                    <p className="mt-3 text-xs leading-tight text-zinc-400">{message[item.id]}</p>
+                    <p className="mt-3 text-xs leading-tight text-muted-foreground">{message[item.id]}</p>
                   ) : null}
                 </div>
               </div>
@@ -586,20 +1034,20 @@ export default function InventoryCards({ items }: Props) {
 
   return (
     <div className="space-y-6 font-sans">
-      <Card className="rounded-[1.75rem] border border-zinc-700 bg-zinc-800 font-sans text-white shadow-sm">
-        <CardHeader className="gap-4 border-b border-zinc-700 pb-5">
+      <Card className="rounded-[1.75rem] border border-border bg-card font-sans text-foreground shadow-sm">
+        <CardHeader className="gap-4 border-b border-border pb-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="space-y-1">
               <CardTitle className="font-sans text-2xl font-semibold tracking-tight text-blue-400">
                 Inventory Workspace
               </CardTitle>
-              <p className="font-sans text-sm text-zinc-400">
+              <p className="font-sans text-sm text-muted-foreground">
                 Scan the essentials in compact mode and open a single product only when you need
                 the extra details or actions.
               </p>
             </div>
 
-            <div className="inline-flex rounded-full border border-zinc-700 bg-zinc-900 p-1">
+            <div className="inline-flex rounded-full border border-border bg-background p-1">
               <ViewModeButton
                 active={viewMode === "compact"}
                 onClick={() => setViewMode("compact")}
@@ -617,12 +1065,12 @@ export default function InventoryCards({ items }: Props) {
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
             <div className="relative w-full">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
                 onChange={(event) => handleQueryChange(event.target.value)}
                 placeholder="Search name, distributor, brand, category, or SKU"
-                className="border-zinc-700 bg-zinc-900 pl-9 font-sans text-white placeholder:text-zinc-500 focus-visible:border-zinc-500"
+                className="border-border bg-background pl-9 font-sans text-foreground placeholder:text-muted-foreground focus-visible:border-ring"
               />
             </div>
 
@@ -635,10 +1083,10 @@ export default function InventoryCards({ items }: Props) {
                   size="sm"
                   onClick={() => handleCategoryChange(value)}
                   className={cn(
-                    "rounded-full border-zinc-700",
+                    "rounded-full border-border",
                     category === value
-                      ? "bg-zinc-700 text-white hover:bg-zinc-600"
-                      : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                      ? "bg-muted text-foreground hover:bg-muted"
+                      : "bg-background text-foreground hover:bg-muted hover:text-foreground"
                   )}
                 >
                   {value === "all" ? "All categories" : value}
@@ -654,10 +1102,10 @@ export default function InventoryCards({ items }: Props) {
               size="sm"
               onClick={() => handleStockFilterChange("all")}
               className={cn(
-                "rounded-full border-zinc-700",
+                "rounded-full border-border",
                 stockFilter === "all"
-                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
-                  : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                  ? "bg-muted text-foreground hover:bg-muted"
+                  : "bg-background text-foreground hover:bg-muted hover:text-foreground"
               )}
             >
               All stock
@@ -668,10 +1116,10 @@ export default function InventoryCards({ items }: Props) {
               size="sm"
               onClick={() => handleStockFilterChange("in")}
               className={cn(
-                "rounded-full border-zinc-700",
+                "rounded-full border-border",
                 stockFilter === "in"
-                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
-                  : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                  ? "bg-muted text-foreground hover:bg-muted"
+                  : "bg-background text-foreground hover:bg-muted hover:text-foreground"
               )}
             >
               In stock
@@ -682,10 +1130,10 @@ export default function InventoryCards({ items }: Props) {
               size="sm"
               onClick={() => handleStockFilterChange("low")}
               className={cn(
-                "rounded-full border-zinc-700",
+                "rounded-full border-border",
                 stockFilter === "low"
-                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
-                  : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                  ? "bg-muted text-foreground hover:bg-muted"
+                  : "bg-background text-foreground hover:bg-muted hover:text-foreground"
               )}
             >
               Low stock
@@ -696,10 +1144,10 @@ export default function InventoryCards({ items }: Props) {
               size="sm"
               onClick={() => handleStockFilterChange("out")}
               className={cn(
-                "rounded-full border-zinc-700",
+                "rounded-full border-border",
                 stockFilter === "out"
-                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
-                  : "bg-zinc-900 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                  ? "bg-muted text-foreground hover:bg-muted"
+                  : "bg-background text-foreground hover:bg-muted hover:text-foreground"
               )}
             >
               Out of stock
@@ -708,6 +1156,37 @@ export default function InventoryCards({ items }: Props) {
         </CardHeader>
 
         <CardContent className="space-y-4 pt-4">
+          {saveStatus ? (
+            <div
+              className={cn(
+                "rounded-xl border px-4 py-3 text-sm font-medium",
+                saveStatus.tone === "success"
+                  ? "border-green-500/30 bg-green-500/10 text-green-300"
+                  : "border-red-500/40 bg-red-500/10 text-red-300"
+              )}
+            >
+              {saveStatus.text}
+            </div>
+          ) : null}
+
+          <section className="rounded-2xl border border-border bg-background/70 p-3 sm:p-4">
+            <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
+              {distributorSummary.map((summary) => (
+                <div
+                  key={summary.name}
+                  className="rounded-lg border border-border bg-muted px-3 py-2"
+                >
+                  <div className="truncate text-[11px] font-semibold text-muted-foreground">
+                    {summary.name}
+                  </div>
+                  <div className="mt-1 text-sm font-bold tabular-nums text-foreground">
+                    {summary.count} items
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
           {groupedItems.length > 0 ? (
             groupedItems.map((distributorGroup) => {
               const distributorCollapsed = collapsedDistributors[distributorGroup.name] ?? false
@@ -715,12 +1194,12 @@ export default function InventoryCards({ items }: Props) {
               return (
                 <section
                   key={distributorGroup.name}
-                  className="overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900/60"
+                  className="overflow-hidden rounded-2xl border border-border bg-background/60"
                 >
                   <button
                     type="button"
                     onClick={() => toggleDistributor(distributorGroup.name)}
-                    className="flex w-full items-center justify-between gap-3 border-b border-zinc-700 bg-zinc-800 px-4 py-3 text-left transition hover:bg-zinc-700"
+                    className="flex w-full items-center justify-between gap-3 border-b border-border bg-card px-4 py-3 text-left transition hover:bg-muted"
                     aria-expanded={!distributorCollapsed}
                   >
                     <span className="flex min-w-0 items-center gap-3">
@@ -733,7 +1212,7 @@ export default function InventoryCards({ items }: Props) {
                         {distributorGroup.name}
                       </span>
                     </span>
-                    <span className="shrink-0 rounded-full border border-zinc-600 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300">
+                    <span className="shrink-0 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground">
                       {distributorGroup.itemsCount} items
                     </span>
                   </button>
@@ -743,43 +1222,86 @@ export default function InventoryCards({ items }: Props) {
                       {distributorGroup.brands.map((brandGroup) => {
                         const brandKey = `${distributorGroup.name}::${brandGroup.name}`
                         const brandCollapsed = collapsedBrands[brandKey] ?? true
+                        const productTypeGroups = groupItemsByProductType(brandGroup.items)
+                        const normalizedBrandKey = getNormalizedBrandName(
+                          brandGroup.items[0]?.brand ?? brandGroup.name
+                        )
+                        const brandLocked = normalizedBrandKey
+                          ? lockedBrands[normalizedBrandKey] ?? false
+                          : false
+                        const brandSaving = normalizedBrandKey
+                          ? savingBrandKeys[normalizedBrandKey] ?? false
+                          : false
 
                         return (
                           <section
                             key={brandKey}
-                            className="rounded-xl border border-zinc-700 bg-zinc-900"
+                            className="rounded-xl border border-border bg-background"
                           >
-                            <button
-                              type="button"
-                              onClick={() => toggleBrand(distributorGroup.name, brandGroup.name)}
-                              className="flex w-full items-center justify-between gap-3 border-b border-zinc-700 px-3 py-2.5 text-left transition hover:bg-zinc-800"
-                              aria-expanded={!brandCollapsed}
-                            >
-                              <span className="flex min-w-0 items-center gap-2">
+                            <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5">
+                              <button
+                                type="button"
+                                onClick={() => toggleBrand(distributorGroup.name, brandGroup.name)}
+                                className="flex min-w-0 flex-1 items-center gap-2 text-left transition hover:text-foreground"
+                                aria-expanded={!brandCollapsed}
+                              >
                                 {brandCollapsed ? (
-                                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
+                                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                                 ) : (
-                                  <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" />
+                                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
                                 )}
-                                <span className="truncate text-sm font-semibold text-zinc-100">
+                                <span className="truncate text-sm font-semibold text-foreground">
                                   {brandGroup.name}
                                 </span>
-                              </span>
-                              <span className="shrink-0 text-xs text-zinc-400">
-                                {brandGroup.items.length} items
-                              </span>
-                            </button>
+                                <span className="shrink-0 text-xs text-muted-foreground">
+                                  {brandGroup.items.length} items
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void toggleBrandLock(brandGroup, !brandLocked)
+                                }}
+                                disabled={brandSaving}
+                                className={cn(
+                                  "shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold transition",
+                                  brandLocked
+                                    ? "border-orange-500/40 bg-orange-500/10 text-orange-300 hover:bg-orange-500/20"
+                                    : "border-border bg-card text-foreground hover:bg-muted hover:text-foreground",
+                                  brandSaving && "cursor-not-allowed opacity-60"
+                                )}
+                                aria-pressed={brandLocked}
+                              >
+                                {brandLocked ? "🔒 Locked" : "🔓 Unlock"}
+                              </button>
+                            </div>
 
                             {!brandCollapsed ? (
-                              <div
-                                className={cn(
-                                  "p-3",
-                                  viewMode === "compact"
-                                    ? "grid gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
-                                    : "space-y-3"
-                                )}
-                              >
-                                {brandGroup.items.map((item) => renderInventoryItem(item, brandGroup.name))}
+                              <div className="space-y-5 p-3">
+                                {productTypeGroups.map((productTypeGroup) => (
+                                  <section
+                                    key={`${brandKey}::${productTypeGroup.name}`}
+                                    className="mt-5 first:mt-0"
+                                  >
+                                    <div className="mb-2 border-b border-orange-500/30 pb-1">
+                                      <div className="text-[11px] font-bold uppercase tracking-wide text-orange-400">
+                                        {productTypeGroup.name}
+                                      </div>
+                                    </div>
+                                    <div
+                                      className={cn(
+                                        viewMode === "compact"
+                                          ? "grid gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-5"
+                                          : "space-y-3"
+                                      )}
+                                    >
+                                      {productTypeGroup.items.map((item) =>
+                                        renderInventoryItem(item, brandGroup.name)
+                                      )}
+                                    </div>
+                                  </section>
+                                ))}
                               </div>
                             ) : null}
                           </section>
@@ -793,7 +1315,7 @@ export default function InventoryCards({ items }: Props) {
           ) : null}
 
           {filteredItems.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-zinc-700 p-10 text-center text-sm text-zinc-400">
+            <div className="rounded-2xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
               No inventory items match your filters.
             </div>
           ) : null}
@@ -818,11 +1340,48 @@ function ViewModeButton({
       onClick={onClick}
       className={cn(
         "rounded-full px-4 py-2 text-sm font-medium transition",
-        active ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
+        active ? "bg-muted text-foreground shadow-sm" : "text-muted-foreground hover:bg-card hover:text-foreground"
       )}
     >
       {children}
     </button>
+  )
+}
+
+function DistributorSelect({
+  className,
+  compact = false,
+  disabled,
+  onChange,
+  productName,
+  value,
+}: {
+  className?: string
+  compact?: boolean
+  disabled?: boolean
+  onChange: (distributor: string) => void
+  productName: string
+  value: string
+}) {
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      aria-label={`Distributor for ${productName}`}
+      onChange={(event) => onChange(event.target.value)}
+      className={cn(
+        "w-full rounded-lg border border-border bg-background font-medium text-foreground outline-none transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60",
+        compact ? "h-6 px-2 text-[10px]" : "h-8 px-2.5 text-sm",
+        className
+      )}
+    >
+      <option value="">Choose distributor</option>
+      {DISTRIBUTOR_OPTIONS.map((distributor) => (
+        <option key={distributor} value={distributor}>
+          {distributor}
+        </option>
+      ))}
+    </select>
   )
 }
 
@@ -838,13 +1397,13 @@ function SummaryPanel({
   emphasized?: boolean
 }) {
   return (
-    <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3">
-      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
+    <div className="rounded-2xl border border-border bg-background px-4 py-3">
+      <div className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
         {label}
       </div>
       <div
         className={cn(
-          "mt-2 text-base font-semibold tracking-tight text-white",
+          "mt-2 text-base font-semibold tracking-tight text-foreground",
           emphasized && "text-lg",
           toneClass
         )}
@@ -865,11 +1424,11 @@ function DetailPanelItem({
   valueClassName?: string
 }) {
   return (
-    <div className="rounded-2xl border border-zinc-700 bg-zinc-800 px-4 py-3">
-      <div className="text-[11px] font-semibold tracking-[0.08em] text-zinc-400 uppercase">
+    <div className="rounded-2xl border border-border bg-card px-4 py-3">
+      <div className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
         {label}
       </div>
-      <div className={cn("mt-1 text-sm font-medium text-white", valueClassName)}>{value}</div>
+      <div className={cn("mt-1 text-sm font-medium text-foreground", valueClassName)}>{value}</div>
     </div>
   )
 }
@@ -886,11 +1445,11 @@ function CompactQuantityStepper({
   value: number
 }) {
   return (
-    <span className="inline-flex items-center gap-1 align-middle text-xs text-white">
+    <span className="inline-flex items-center gap-1 align-middle text-xs text-foreground">
       <button
         type="button"
         onClick={onDecrease}
-        className="inline-flex size-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
+        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
         aria-label={`Decrease quantity for ${productName}`}
       >
         <Minus className="h-3 w-3" />
@@ -899,7 +1458,7 @@ function CompactQuantityStepper({
       <button
         type="button"
         onClick={onIncrease}
-        className="inline-flex size-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-400 transition hover:bg-zinc-700 hover:text-white"
+        className="inline-flex size-5 items-center justify-center rounded border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
         aria-label={`Increase quantity for ${productName}`}
       >
         <Plus className="h-3 w-3" />

@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { resolveDistributorBrand } from "@/lib/inventory/distributors";
 import {
   asNumber,
   asString,
@@ -46,12 +47,23 @@ export function cleanProductRow(row: Partial<ImportUploadRow>): ProductImportRow
 
   if (!sku || !name) return null;
 
+  const brandName = asString(row.brand) || "Unknown";
+  const importedDistributor = asString(row.vendor) || null;
+  const distributorResolution = resolveDistributorBrand(brandName, importedDistributor);
+  const distro =
+    importedDistributor ??
+    (distributorResolution &&
+    !distributorResolution.review_required &&
+    (distributorResolution.locked || distributorResolution.notes === "Legacy fallback")
+      ? distributorResolution.distributor
+      : null);
+
   return {
     sku,
-    brand_name: asString(row.brand) || "Unknown",
+    brand_name: brandName,
     product_name: name,
     category: asString(row.category) || null,
-    distro: asString(row.vendor) || null,
+    distro,
     current_price: asNumber(row.price) ?? 0,
     active: row.is_active !== false,
   };
@@ -198,11 +210,20 @@ export function buildInventoryUpserts(
     const productId = matchProductId(row, lookup);
 
     if (!productId) {
+      const distributorResolution = resolveDistributorBrand(row.brand, row.vendor);
+
       unmatchedRows.push({
         brand: asString(row.brand) || null,
         name: asString(row.name),
         inventory: Number(row.inventory ?? 0),
         reorder_point: Number(row.reorder_point ?? 0),
+        suggested_distributor: distributorResolution?.review_required
+          ? null
+          : distributorResolution?.distributor ?? null,
+        match_type: distributorResolution?.match_type ?? null,
+        confidence: distributorResolution?.confidence ?? null,
+        review_required: distributorResolution?.review_required ?? false,
+        notes: distributorResolution?.notes ?? null,
       });
       continue;
     }

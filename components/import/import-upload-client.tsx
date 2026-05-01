@@ -11,6 +11,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import SuggestedDistributor from "@/components/SuggestedDistributor";
 import { cn } from "@/lib/utils";
 import {
   asInt,
@@ -56,6 +57,9 @@ export default function ImportUploadClient({
   const [result, setResult] = useState("");
   const [unmatchedCount, setUnmatchedCount] = useState(0);
   const [unmatchedSample, setUnmatchedSample] = useState<UnmatchedInventoryRow[]>([]);
+  const [acceptedUnmatchedBrandDistributors, setAcceptedUnmatchedBrandDistributors] = useState<
+    Record<string, string>
+  >({});
   const [isCreatingProducts, setIsCreatingProducts] = useState(false);
 
   const isInventoryMode = mode === "inventory";
@@ -86,6 +90,7 @@ export default function ImportUploadClient({
     setImportedCount(0);
     setUnmatchedCount(0);
     setUnmatchedSample([]);
+    setAcceptedUnmatchedBrandDistributors({});
 
     try {
       const buffer = await file.arrayBuffer();
@@ -159,6 +164,7 @@ export default function ImportUploadClient({
     setImportedCount(0);
     setUnmatchedCount(0);
     setUnmatchedSample([]);
+    setAcceptedUnmatchedBrandDistributors({});
 
     const chunks = chunkArray(rows, 500);
     let processed = 0;
@@ -251,7 +257,7 @@ export default function ImportUploadClient({
             sku,
             name,
             brand,
-            vendor: "Unknown",
+            vendor: acceptedUnmatchedBrandDistributors[getUnmatchedBrandKey(item)] ?? null,
             category,
             price: 0,
             inventory: item.inventory || 0,
@@ -306,6 +312,10 @@ export default function ImportUploadClient({
       "is_active",
       "inventory",
       "reorder_point",
+      "match_type",
+      "confidence",
+      "review_required",
+      "notes",
     ];
 
     const rowsForCsv = dedupeUnmatched(unmatchedSample)
@@ -319,11 +329,15 @@ export default function ImportUploadClient({
           brand,
           name,
           guessCategory(name),
-          "Unknown",
+          acceptedUnmatchedBrandDistributors[getUnmatchedBrandKey(item)] ?? "",
           0,
           true,
           item.inventory || 0,
           item.reorder_point || 0,
+          item.match_type ?? "",
+          item.confidence ?? "",
+          item.review_required ? "true" : "false",
+          item.notes ?? "",
         ];
       });
 
@@ -344,6 +358,13 @@ export default function ImportUploadClient({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  }
+
+  function acceptUnmatchedSuggestedDistributor(item: UnmatchedInventoryRow, distributor: string) {
+    setAcceptedUnmatchedBrandDistributors((prev) => ({
+      ...prev,
+      [getUnmatchedBrandKey(item)]: distributor,
+    }));
   }
 
   return (
@@ -543,25 +564,63 @@ export default function ImportUploadClient({
 
               <div className="max-h-80 overflow-y-auto px-5 py-4">
                 <ul className="space-y-3">
-                  {visibleUnmatched.map((item, index) => (
-                    <li
-                      key={`${item.brand || "unknown"}-${item.name}-${index}`}
-                      className="flex items-start justify-between gap-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-amber-950">
-                          {item.name || "Unnamed"}
+                  {visibleUnmatched.map((item, index) => {
+                    const acceptedDistributor =
+                      acceptedUnmatchedBrandDistributors[getUnmatchedBrandKey(item)];
+                    const suggestedDistributor =
+                      !acceptedDistributor &&
+                      item.match_type === "soft" &&
+                      item.confidence === "medium" &&
+                      item.suggested_distributor
+                        ? item.suggested_distributor
+                        : null;
+
+                    return (
+                      <li
+                        key={`${item.brand || "unknown"}-${item.name}-${index}`}
+                        className="flex items-start justify-between gap-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-amber-950">
+                            {item.name || "Unnamed"}
+                          </div>
+                          <div className="mt-1 text-sm text-amber-900/70">
+                            {item.brand || "Unknown brand"}
+                          </div>
+                          {item.review_required ? (
+                            <div className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-red-700">
+                              Review distributor match
+                            </div>
+                          ) : suggestedDistributor ? (
+                            <SuggestedDistributor
+                              distributor={suggestedDistributor}
+                              onSelect={(selectedDistributor) =>
+                                acceptUnmatchedSuggestedDistributor(
+                                  item,
+                                  selectedDistributor
+                                )
+                              }
+                              tone="light"
+                              className="mt-2"
+                            />
+                          ) : acceptedDistributor ? (
+                            <div className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-amber-800">
+                              Distributor {acceptedDistributor}
+                            </div>
+                          ) : null}
+                          {item.notes ? (
+                            <div className="mt-1 text-xs text-amber-900/70">{item.notes}</div>
+                          ) : null}
                         </div>
-                        <div className="mt-1 text-sm text-amber-900/70">
-                          {item.brand || "Unknown brand"}
+                        <div className="shrink-0 text-right text-xs uppercase tracking-[0.16em] text-amber-800/80">
+                          <div>Inventory {formatNumber(item.inventory || 0)}</div>
+                          <div className="mt-1">
+                            Reorder {formatNumber(item.reorder_point || 0)}
+                          </div>
                         </div>
-                      </div>
-                      <div className="shrink-0 text-right text-xs uppercase tracking-[0.16em] text-amber-800/80">
-                        <div>Inventory {formatNumber(item.inventory || 0)}</div>
-                        <div className="mt-1">Reorder {formatNumber(item.reorder_point || 0)}</div>
-                      </div>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             </div>
@@ -688,4 +747,8 @@ function formatFileSize(bytes: number) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
+}
+
+function getUnmatchedBrandKey(item: UnmatchedInventoryRow) {
+  return (item.brand || "").trim().toLowerCase();
 }

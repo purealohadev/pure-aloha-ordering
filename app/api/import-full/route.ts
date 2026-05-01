@@ -10,6 +10,10 @@ function toNumber(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function normalizeLockedBrand(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
 export async function POST(req: Request) {
   try {
     const supabase = await createClient();
@@ -24,6 +28,33 @@ export async function POST(req: Request) {
 
     let processed = 0;
     let inventoryUpdated = 0;
+    let skippedDistributorOverwrites = 0;
+    const importBrandKeys = Array.from(
+      new Set(
+        rows
+          .map((row) => normalizeLockedBrand(row.brand_name))
+          .filter((brandKey) => brandKey.length > 0)
+      )
+    );
+    const lockedDistributorByBrand = new Map<string, string | null>();
+
+    if (importBrandKeys.length) {
+      const { data: lockedProducts, error: lockedFetchError } = await supabase
+        .from("products")
+        .select("brand_name, distro, distributor_locked")
+        .eq("distributor_locked", true);
+
+      if (lockedFetchError) throw lockedFetchError;
+
+      for (const product of lockedProducts ?? []) {
+        const brandKey = normalizeLockedBrand(product.brand_name);
+
+        if (!brandKey || !importBrandKeys.includes(brandKey)) continue;
+        if (!lockedDistributorByBrand.has(brandKey) || product.distro) {
+          lockedDistributorByBrand.set(brandKey, product.distro ?? null);
+        }
+      }
+    }
 
     for (const row of rows) {
       const brand_name = cleanText(row.brand_name);
@@ -33,8 +64,17 @@ export async function POST(req: Request) {
       const current_price = toNumber(row.current_price);
       const on_hand = toNumber(row.on_hand);
       const par_level = toNumber(row.par_level);
+      const brandKey = normalizeLockedBrand(brand_name);
+      const isLockedBrand = lockedDistributorByBrand.has(brandKey);
+      const lockedDistributor = isLockedBrand
+        ? lockedDistributorByBrand.get(brandKey) ?? null
+        : null;
 
       if (!brand_name || !product_name) continue;
+
+      if (isLockedBrand && distro !== (lockedDistributor ?? "")) {
+        skippedDistributorOverwrites += 1;
+      }
 
       const { data: product, error: productError } = await supabase
         .from("products")
@@ -43,9 +83,10 @@ export async function POST(req: Request) {
             brand_name,
             product_name,
             category,
-            distro,
+            distro: isLockedBrand ? lockedDistributor : distro,
             current_price,
             active: true,
+            ...(isLockedBrand ? { distributor_locked: true } : {}),
           },
           {
             onConflict: "brand_name,product_name",
@@ -80,6 +121,7 @@ export async function POST(req: Request) {
       success: true,
       count: processed,
       inventoryUpdated,
+      skipped_distributor_overwrites: skippedDistributorOverwrites,
     });
   } catch (e: any) {
     return NextResponse.json(
@@ -88,4 +130,3 @@ export async function POST(req: Request) {
     );
   }
 }
-
