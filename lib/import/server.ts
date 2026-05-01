@@ -16,6 +16,7 @@ export type ProductImportRow = {
   product_name: string;
   category: string | null;
   distro: string | null;
+  unit_cost: number | null;
   current_price: number;
   active: boolean;
 };
@@ -64,6 +65,7 @@ export function cleanProductRow(row: Partial<ImportUploadRow>): ProductImportRow
     product_name: name,
     category: asString(row.category) || null,
     distro,
+    unit_cost: asNumber(row.price),
     current_price: asNumber(row.price) ?? 0,
     active: row.is_active !== false,
   };

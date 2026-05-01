@@ -94,8 +94,10 @@ export default function NavBar() {
 
   const utilityLinks = [
     { href: "/order-history", label: "Order History" },
+    { href: "/price-alerts", label: "Price Alerts" },
     ...(canAccessImports
       ? [
+          { href: "/price-history", label: "Price History" },
           { href: "/approvals", label: "Approvals" },
           { href: "/admin/vendors", label: "Vendors" },
           { href: "/admin/credits-returns", label: "Credits & Returns" },

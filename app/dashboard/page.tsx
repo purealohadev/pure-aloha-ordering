@@ -111,6 +111,11 @@ export default async function DashboardPage() {
     .order("created_at", { ascending: false })
     .limit(4);
 
+  const { data: openPriceAlerts } = await supabase
+    .from("price_alerts")
+    .select("change_direction")
+    .eq("status", "open");
+
   const role = profile?.role ?? "";
   const canAccessApprovals = role === "manager" || role === "admin";
   const displayName = profile?.full_name ?? profile?.email ?? user.email ?? "Team Member";
@@ -120,6 +125,10 @@ export default async function DashboardPage() {
   const pendingApprovals = pendingCount ?? 0;
   const approvedOrders = approvedCount ?? 0;
   const drafts = draftCount ?? 0;
+  const openAlerts = (openPriceAlerts ?? []) as { change_direction: string | null }[];
+  const priceIncreases = openAlerts.filter((alert) => alert.change_direction === "increase").length;
+  const priceDecreases = openAlerts.filter((alert) => alert.change_direction === "decrease").length;
+  const openPriceAlertCount = openAlerts.length;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -183,6 +192,41 @@ export default async function DashboardPage() {
             <ActionButton href="/orders" icon={ShoppingCart} label="Create / Review Orders" />
             <ActionButton href="/order-history" icon={ListChecks} label="Order History" />
           </section>
+
+          <Card className="border border-border/80 bg-card/95 shadow-sm">
+            <CardHeader className="border-b border-border/70 pb-4">
+              <CardTitle className="text-base font-semibold">Price Tracker</CardTitle>
+              <CardDescription className="text-sm">
+                Monitor imported cost changes before they cascade into order planning.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <MiniMetric label="Price Increases" value={formatNumber(priceIncreases)} tone="up" />
+                <MiniMetric label="Price Decreases" value={formatNumber(priceDecreases)} tone="down" />
+                <MiniMetric label="Open Price Alerts" value={formatNumber(openPriceAlertCount)} tone="neutral" />
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-muted-foreground">
+                  Review open changes, then mark them reviewed when the team has handled them.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button asChild variant="outline" size="sm">
+                    <Link href="/price-alerts">
+                      Open Price Alerts
+                      <ArrowRight className="size-3.5" />
+                    </Link>
+                  </Button>
+                  <Button asChild variant="outline" size="sm">
+                    <Link href="/price-history">
+                      Price History
+                      <ArrowRight className="size-3.5" />
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
             <Card className="border border-border/80 bg-card/95 shadow-sm">
@@ -315,6 +359,30 @@ function ActionButton({
         <ArrowRight className="size-4 text-muted-foreground" />
       </Link>
     </Button>
+  );
+}
+
+function MiniMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "up" | "down" | "neutral";
+}) {
+  const toneClass =
+    tone === "up"
+      ? "border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300"
+      : tone === "down"
+        ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+        : "border-border bg-background/60 text-foreground";
+
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${toneClass}`}>
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
+    </div>
   );
 }
 
