@@ -107,7 +107,7 @@ export default async function PriceHistoryPage() {
     .order("changed_at", { ascending: false })
     .limit(250)
 
-  const rows = ((history ?? []) as PriceHistoryRow[]).map((row) => {
+  const rows = ((history ?? []) as unknown as PriceHistoryRow[]).map((row) => {
     const percentChange = getPercentChange(row.old_cost, row.new_cost)
 
     return {

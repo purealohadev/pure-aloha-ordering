@@ -72,7 +72,7 @@ export default async function PriceAlertsPage() {
     )
   }
 
-  const rows = ((data ?? []) as PriceHistoryRow[])
+  const rows = ((data ?? []) as unknown as PriceHistoryRow[])
     .map((row) => {
       const percentChange = getPercentChange(row.old_cost, row.new_cost)
 
