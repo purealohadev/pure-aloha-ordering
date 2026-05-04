@@ -113,7 +113,7 @@ export async function POST(request: Request) {
         distro: isLockedBrand ? lockedDistributor : row.distro,
         current_price: row.current_price,
         active: row.active,
-        unit_cost: row.unit_cost,
+        
         ...(isLockedBrand ? { distributor_locked: true } : {}),
       });
     }
@@ -137,10 +137,8 @@ export async function POST(request: Request) {
 
     for (const row of dedupedProductsByName) {
       const unitCost = cleanImportedUnitCost({
-        unit_cost: row.unit_cost,
-        price: row.unit_cost,
-        current_price: row.current_price,
-      });
+  current_price: row.current_price,
+});
 
       if (unitCost == null) {
         continue;
