@@ -50,7 +50,8 @@ export default async function InventoryPage() {
       .order("changed_at", { ascending: false }),
   ])
 
-  const { data: products, error: productError } = productResult
+  const { data: productsRaw, error: productError } = productResult
+const products = (productsRaw ?? []) as any[]
 
   if (productError) {
     return <div className="min-h-screen bg-background p-6 text-red-500">{productError.message}</div>
