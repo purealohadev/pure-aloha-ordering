@@ -37,6 +37,10 @@ export type InventoryItem = {
   category: string | null
   sku: string | null
   price: number | null
+  cost?: number | null
+  previous_cost?: number | null
+  cost_change_percent?: number | null
+  cost_change_direction?: "up" | "down" | "same" | null
   inventory: number | null
   low_stock_threshold?: number | null
   current_par?: number | null
@@ -989,6 +993,15 @@ export default function InventoryCards({ items, salesSummary }: Props) {
     const suggestedPar = salesMetric?.suggested_par ?? item.suggested_par ?? 0
     const avgDailySales = salesMetric?.avg_daily_sales ?? item.avg_daily_sales ?? 0
     const windowSales = salesMetric?.window_sales ?? item.window_sales ?? 0
+    const cost = item.cost ?? 0
+    const price = item.price ?? 0
+    const margin = price > 0 && cost > 0 ? ((price - cost) / price) * 100 : null
+    const percentChange = item.cost_change_percent ?? 0
+    const isCostUp = item.cost_change_direction === "up"
+    const isCostDown = item.cost_change_direction === "down"
+    const hasCostChange = Math.abs(percentChange) > 0
+    const previousCostLabel =
+      item.previous_cost != null ? `Previous cost: ${currencyFormatter.format(item.previous_cost)}` : undefined
     const tone = stockTone(inventory, threshold)
     const isOut = inventory <= 0
     const isExpanded = isItemExpanded(item.id)
@@ -1048,14 +1061,57 @@ export default function InventoryCards({ items, salesSummary }: Props) {
                   <span aria-hidden="true">·</span>
                   <span>Sug {suggestedPar}</span>
                 </div>
+
+                <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap text-[10px] font-medium text-emerald-400">
+                  <span>Cost: {currencyFormatter.format(cost)}</span>
+                  {hasCostChange ? (
+                    <span
+                      className={cn(
+                        isCostUp && "text-red-400",
+                        isCostDown && "text-green-400",
+                        !isCostUp && !isCostDown && "text-muted-foreground"
+                      )}
+                      title={previousCostLabel}
+                    >
+                      {isCostUp ? "↑" : isCostDown ? "↓" : "→"} {Math.abs(percentChange).toFixed(1)}%
+                    </span>
+                  ) : null}
+                </div>
+
                 <div className="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
-                  <span>{formatMetricValue(avgDailySales)} avg/day</span>
-                  <span aria-hidden="true">·</span>
-                  <span>
-                    {formatMetricValue(windowSales)} {salesWindowLabel}
-                  </span>
+                  <span><span
+  className={
+    margin === null
+      ? "text-muted-foreground"
+      : margin < 30
+      ? "text-red-400"
+      : margin < 50
+      ? "text-yellow-400"
+      : "text-green-400"
+  }
+>
+  Margin: <span
+  className={
+    margin === null
+      ? "text-muted-foreground"
+      : margin < 30
+      ? "text-red-400"
+      : margin < 50
+      ? "text-yellow-400"
+      : "text-green-400"
+  }
+>
+  {margin !== null ? `${margin.toFixed(1)}%` : "—"}
+</span>
+{margin !== null && margin < 30 && (
+  <div className="text-[10px] text-red-400">
+    Low margin — review pricing
+  </div>
+)}
+</span></span>
                 </div>
               </div>
+
               <CompactQuantityStepper
                 value={getQty(item.id)}
                 onDecrease={() => setQty(item.id, String(getQty(item.id) - 1))}
@@ -1197,6 +1253,20 @@ export default function InventoryCards({ items, salesSummary }: Props) {
                 <DetailPanelItem
                   label="Price"
                   value={item.price != null ? currencyFormatter.format(item.price) : "—"}
+                />
+                <DetailPanelItem label="Cost" value={currencyFormatter.format(cost)} />
+                <DetailPanelItem
+                  label="Margin"
+                  value={margin != null ? `${margin.toFixed(1)}%` : "—"}
+                />
+                <DetailPanelItem
+                  label="Cost Change"
+                  value={
+                    hasCostChange
+                      ? `${isCostUp ? "↑" : isCostDown ? "↓" : "→"} ${Math.abs(percentChange).toFixed(1)}%`
+                      : "—"
+                  }
+                  valueClassName={cn(isCostUp && "text-red-400", isCostDown && "text-green-400")}
                 />
                 <DetailPanelItem
                   label="Inventory"

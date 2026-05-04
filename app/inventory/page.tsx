@@ -16,16 +16,38 @@ const EMPTY_SALES_SUMMARY: SalesParSummary = {
 export default async function InventoryPage() {
   const supabase = createServiceRoleClient()
 
-  const [productColumns, inventoryColumns, productResult, inventoryResult] = await Promise.all([
+  const [productColumns, inventoryColumns] = await Promise.all([
     loadPublicTableColumns(supabase, "products"),
     loadPublicTableColumns(supabase, "inventory"),
+  ])
+
+  const productSelectFields = [
+    "id",
+    "product_name",
+    "brand_name",
+    "category",
+    "distro",
+    "sku",
+    "current_price",
+    "distributor_locked",
+    productColumns.has("cost") ? "cost" : null,
+    productColumns.has("unit_cost") ? "unit_cost" : null,
+    productColumns.has("wholesale_price") ? "wholesale_price" : null,
+    productColumns.has("current_cost") ? "current_cost" : null,
+  ]
+    .filter(Boolean)
+    .join(", ")
+
+  const [productResult, inventoryResult, priceHistoryResult] = await Promise.all([
     supabase
       .from("products")
-      .select(
-        "id, product_name, brand_name, category, distro, sku, current_price, distributor_locked"
-      )
+      .select(productSelectFields)
       .order("product_name", { ascending: true }),
     supabase.from("inventory").select("product_id, on_hand, par_level"),
+    supabase
+      .from("price_history")
+      .select("product_id, old_cost, new_cost, changed_at")
+      .order("changed_at", { ascending: false }),
   ])
 
   const { data: products, error: productError } = productResult
@@ -40,6 +62,12 @@ export default async function InventoryPage() {
     return <div className="min-h-screen bg-background p-6 text-red-500">{inventoryError.message}</div>
   }
 
+  const { data: priceHistory, error: priceHistoryError } = priceHistoryResult
+
+  if (priceHistoryError) {
+    return <div className="min-h-screen bg-background p-6 text-red-500">{priceHistoryError.message}</div>
+  }
+
   const salesSummary = await loadSuggestedParSummary(supabase, {
     windowDays: 30,
     targetDaysOfStock: 14,
@@ -50,6 +78,17 @@ export default async function InventoryPage() {
   )
 
   const inventoryMap = new Map((inventory ?? []).map((i) => [i.product_id, i]))
+
+  const latestPriceHistoryMap = new Map<string, { old_cost: number | null; new_cost: number | null }>()
+
+  for (const row of priceHistory ?? []) {
+    if (!latestPriceHistoryMap.has(row.product_id)) {
+      latestPriceHistoryMap.set(row.product_id, {
+        old_cost: row.old_cost,
+        new_cost: row.new_cost,
+      })
+    }
+  }
 
   const existingBrands = Array.from(
     new Set(
@@ -69,16 +108,30 @@ export default async function InventoryPage() {
     cost:
       productColumns.has("current_price") ||
       productColumns.has("unit_cost") ||
-      productColumns.has("cost"),
+      productColumns.has("cost") ||
+      productColumns.has("wholesale_price") ||
+      productColumns.has("current_cost"),
     parLevel: inventoryColumns.has("par_level"),
     notes: productColumns.has("notes"),
     unitSize: productColumns.has("unit_size"),
     packageSize: productColumns.has("package_size"),
   }
 
-  const items: InventoryItem[] = (products ?? []).map((product) => {
+  const items: InventoryItem[] = (products ?? []).map((product: any) => {
     const inv = inventoryMap.get(product.id)
     const salesMetric = salesMetricsMap.get(product.id)
+    const latestPriceChange = latestPriceHistoryMap.get(product.id)
+    const currentCost =
+      product.cost ??
+      product.unit_cost ??
+      product.wholesale_price ??
+      product.current_cost ??
+      0
+    const previousCost = latestPriceChange?.old_cost ?? null
+    const costChangePercent =
+      previousCost && currentCost ? ((currentCost - previousCost) / previousCost) * 100 : 0
+    const costChangeDirection =
+      costChangePercent > 0 ? "up" : costChangePercent < 0 ? "down" : "same"
 
     return {
       id: product.id,
@@ -87,13 +140,21 @@ export default async function InventoryPage() {
       distributor: product.distro,
       category: product.category,
       sku: product.sku,
-      price: product.current_price,
+
+      price: product.current_price ?? 0,
+      cost: currentCost,
+      previous_cost: previousCost,
+      cost_change_percent: costChangePercent,
+      cost_change_direction: costChangeDirection,
+
       inventory: inv?.on_hand ?? 0,
       low_stock_threshold: inv?.par_level ?? 5,
       current_par: inv?.par_level ?? 0,
       suggested_par: salesMetric?.suggested_par ?? 0,
+
       avg_daily_sales: salesMetric?.avg_daily_sales ?? 0,
       window_sales: salesMetric?.window_sales ?? 0,
+
       sales_window_days: salesSummary.window_days,
       target_days_of_stock: salesSummary.target_days_of_stock,
       distributor_locked: product.distributor_locked ?? false,
@@ -134,10 +195,7 @@ export default async function InventoryPage() {
           />
         </div>
 
-        <InventoryCards
-          items={items}
-          salesSummary={salesSummary}
-        />
+        <InventoryCards items={items} salesSummary={salesSummary} />
       </main>
     </div>
   )
