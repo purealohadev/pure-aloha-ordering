@@ -10,6 +10,11 @@ import {
   isNonConsumableCategory,
   resolveDistributorBrand,
 } from "@/lib/inventory/distributors";
+import {
+  buildSalesVelocitySummary,
+  type SalesHistoryRow,
+  type SalesVelocityMetric,
+} from "@/app/lib/parCalculator";
 import { createClient } from "@/lib/supabase/client";
 
 type OrderRow = {
@@ -22,7 +27,19 @@ type OrderRow = {
   current_price: number;
   onHand: number;
   par: number;
-  suggested: number;
+  reorder_point: number;
+  manualPar: number | null;
+  manualReorderPoint: number | null;
+  suggestedPar: number;
+  suggestedReorderPoint: number;
+  targetStock: number;
+  targetStockSource: "manual" | "sales-based" | "fallback default";
+  reorderPointSource: "manual" | "sales-based" | "fallback default";
+  dailyVelocity: number;
+  daysOfInventoryRemaining: number | null;
+  targetLabel?: string;
+  targetSourceName: string;
+  suggestedQty: number;
   orderQty: number;
   status: "Out" | "Needs Reorder" | "Healthy";
   lineTotal: number;
@@ -31,6 +48,7 @@ type OrderRow = {
 type ProductInventory = {
   on_hand: number | string | null;
   par_level: number | string | null;
+  reorder_point?: number | string | null;
 };
 
 type ProductRecord = {
@@ -69,7 +87,17 @@ type DistributorOrderGroup = {
   brands: BrandOrderGroup[];
 };
 
-type OrderFilter = "all" | "needs" | "credit";
+type SelectedItemGroup = {
+  name: string;
+  itemsCount: number;
+  brands: BrandOrderGroup[];
+};
+
+type OrderFilter = "all" | "needs";
+
+const SALES_HISTORY_WINDOW_DAYS = 30;
+const TARGET_DAYS_OF_INVENTORY = 7;
+const REORDER_LEAD_TIME_DAYS = 3;
 
 const ORDER_EXPORT_DISTRIBUTORS = [
   "KSS",
@@ -95,8 +123,30 @@ function parseCreditAmount(value: number | string | null) {
   return Number.isFinite(amount) ? amount : 0;
 }
 
+function toFiniteNumber(value: unknown, fallback = 0) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  if (value === null || value === undefined || value === "") return fallback;
+
+  const parsed = Number(String(value).replace(/[$,]/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function formatCurrency(value: number | string | null) {
   return currencyFormatter.format(parseCreditAmount(value));
+}
+
+function formatVelocity(value: number | null | undefined) {
+  if (!Number.isFinite(value ?? NaN)) return "0.0";
+
+  return (value ?? 0).toFixed(1);
+}
+
+function formatDaysRemaining(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "—";
+  }
+
+  return value.toFixed(1);
 }
 
 function creditKey(distributor: string, vendorName: string) {
@@ -119,6 +169,44 @@ function sanitizeFilenamePart(value: string) {
 
 function escapeCsvValue(value: unknown) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function getIsoDateDaysAgo(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - Math.max(0, days));
+  return date.toISOString().slice(0, 10);
+}
+
+function resolveTargetStock(row: {
+  manualPar: number | null;
+  suggestedPar: number;
+  manualReorderPoint: number | null;
+}) {
+  if (Number.isFinite(row.manualPar ?? NaN) && (row.manualPar ?? 0) > 0) {
+    return {
+      targetStock: row.manualPar ?? 0,
+      source: "manual par",
+    };
+  }
+
+  if (Number.isFinite(row.suggestedPar ?? NaN) && row.suggestedPar > 0) {
+    return {
+      targetStock: row.suggestedPar,
+      source: "sales-based par",
+    };
+  }
+
+  if (Number.isFinite(row.manualReorderPoint ?? NaN) && (row.manualReorderPoint ?? 0) > 0) {
+    return {
+      targetStock: row.manualReorderPoint ?? 0,
+      source: "manual reorder_point",
+    };
+  }
+
+  return {
+    targetStock: 5,
+    source: "default 5",
+  };
 }
 
 function getOrderDistributorName(brandName: string | null, distributorName: string | null) {
@@ -160,13 +248,13 @@ function getCompactDisplayName(productName: string, brandName: string) {
     : productName;
 }
 
-function getShortage(row: Pick<OrderRow, "onHand" | "par">) {
-  return Math.max(row.par - row.onHand, 0);
+function getShortage(row: Pick<OrderRow, "onHand" | "targetStock">) {
+  return Math.max(row.targetStock - row.onHand, 0);
 }
 
-function getUrgencyRank(row: Pick<OrderRow, "onHand" | "par">) {
+function getUrgencyRank(row: Pick<OrderRow, "onHand" | "targetStock">) {
   if (row.onHand <= 0) return 0;
-  if (row.onHand < row.par) return 1;
+  if (row.onHand < row.targetStock) return 1;
   return 2;
 }
 
@@ -182,6 +270,18 @@ function compareOrderPriority(a: OrderRow, b: OrderRow) {
   return a.product_name.localeCompare(b.product_name);
 }
 
+function compareSelectedOrderPriority(a: OrderRow, b: OrderRow) {
+  const vendorDiff = a.vendor.localeCompare(b.vendor);
+
+  if (vendorDiff !== 0) return vendorDiff;
+
+  const brandDiff = a.brand_name.localeCompare(b.brand_name);
+
+  if (brandDiff !== 0) return brandDiff;
+
+  return compareOrderPriority(a, b);
+}
+
 function getItemUrgencyStyle(row: OrderRow) {
   if (row.onHand <= 0) {
     return {
@@ -192,7 +292,7 @@ function getItemUrgencyStyle(row: OrderRow) {
     };
   }
 
-  if (row.onHand < row.par) {
+  if (row.onHand < row.targetStock) {
     return {
       dotClass: "bg-orange-500",
       cardClass: "border-orange-500/45 bg-orange-500/5",
@@ -302,6 +402,36 @@ function groupRowsByDistributorAndBrand(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function groupSelectedRowsByDistributorAndBrand(rows: OrderRow[]): SelectedItemGroup[] {
+  const distributorMap = new Map<string, Map<string, OrderRow[]>>();
+
+  for (const row of rows) {
+    const brandMap = distributorMap.get(row.vendor) ?? new Map<string, OrderRow[]>();
+    const brandItems = brandMap.get(row.brand_name) ?? [];
+
+    brandItems.push(row);
+    brandMap.set(row.brand_name, brandItems);
+    distributorMap.set(row.vendor, brandMap);
+  }
+
+  return Array.from(distributorMap.entries())
+    .map(([name, brandMap]) => {
+      const brands = Array.from(brandMap.entries())
+        .map(([brandName, items]) => ({
+          name: brandName,
+          items: items.sort(compareSelectedOrderPriority),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      return {
+        name,
+        itemsCount: brands.reduce((total, brand) => total + brand.items.length, 0),
+        brands,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export default function OrdersPage() {
   const [supabase] = useState(() => createClient());
   const [rows, setRows] = useState<OrderRow[]>([]);
@@ -318,7 +448,9 @@ export default function OrdersPage() {
 
   useEffect(() => {
     async function loadData() {
-      const [productsResult, creditTransactionsResult] = await Promise.all([
+      const recentSalesStart = getIsoDateDaysAgo(SALES_HISTORY_WINDOW_DAYS)
+
+      const [productsResult, creditTransactionsResult, salesHistoryResult] = await Promise.all([
         supabase.from("products").select(`
           id,
           brand_name,
@@ -327,25 +459,95 @@ export default function OrdersPage() {
           category,
           distro,
           current_price,
-          inventory (on_hand, par_level)
+          inventory (*)
         `),
         supabase
           .from("credit_transactions")
           .select("id, distributor, vendor_name, credit_type, credit_amount")
           .order("distributor", { ascending: true })
           .order("vendor_name", { ascending: true }),
+        supabase
+          .from("sales_history")
+          .select("sku, product_name, brand_name, quantity_sold, sale_date")
+          .gte("sale_date", recentSalesStart)
+          .order("sale_date", { ascending: true }),
       ]);
+
+      const salesSummary = buildSalesVelocitySummary({
+        products: (productsResult.data as ProductRecord[] | null)?.map((row) => ({
+          id: row.id,
+          sku: row.sku,
+          brand_name: row.brand_name,
+          product_name: row.product_name,
+        })) ?? [],
+        salesRows: ((salesHistoryResult.data as SalesHistoryRow[] | null) ?? []).filter(
+          (row) => Boolean(row.product_name)
+        ),
+        windowDays: SALES_HISTORY_WINDOW_DAYS,
+        targetDaysOfInventory: TARGET_DAYS_OF_INVENTORY,
+        leadTimeDays: REORDER_LEAD_TIME_DAYS,
+      })
+      const salesMetricsMap = new Map<string, SalesVelocityMetric>(
+        salesSummary.metrics.map((metric) => [metric.product_id, metric])
+      )
 
       const mapped =
         (productsResult.data as ProductRecord[] | null)?.filter(
           (row) => !isNonConsumableCategory(row.category)
         ).map((row) => {
           const inv = row.inventory?.[0];
-          const onHand = Number(inv?.on_hand ?? 0);
-          const par = Number(inv?.par_level ?? 0);
-          const suggested = Math.max(par - onHand, 0);
+          const onHand = toFiniteNumber(inv?.on_hand, 0);
+          const rawPar = inv?.par_level;
+          const rawReorderPoint = inv?.reorder_point;
+          const manualPar =
+            toFiniteNumber(rawPar, 0) > 0
+              ? toFiniteNumber(rawPar, 0)
+              : null;
+          const manualReorderPoint =
+            toFiniteNumber(rawReorderPoint, 0) > 0
+              ? toFiniteNumber(rawReorderPoint, 0)
+              : null;
+          const salesMetric = salesMetricsMap.get(row.id);
+          const suggestedPar = toFiniteNumber(salesMetric?.suggested_par, 0);
+          const suggestedReorderPoint = toFiniteNumber(salesMetric?.suggested_reorder_point, 0);
+          const dailyVelocity = toFiniteNumber(salesMetric?.daily_velocity, 0);
+          const resolvedTarget = resolveTargetStock({
+            manualPar,
+            suggestedPar,
+            manualReorderPoint,
+          });
+          const targetStock = toFiniteNumber(resolvedTarget.targetStock, 5);
+          const targetStockSource: OrderRow["targetStockSource"] = manualPar
+            ? "manual"
+            : suggestedPar > 0
+              ? "sales-based"
+              : manualReorderPoint
+                ? "manual"
+                : "fallback default";
+          const targetSourceName = resolvedTarget.source;
+          const reorderPointSource: OrderRow["reorderPointSource"] = manualReorderPoint
+            ? "manual"
+            : suggestedReorderPoint > 0
+              ? "sales-based"
+              : "fallback default";
+          const reorderPoint = toFiniteNumber(manualReorderPoint ?? suggestedReorderPoint ?? 5, 5);
+          const currentInventory = toFiniteNumber(onHand, 0);
+          const suggestedQty = Math.max(targetStock - currentInventory, 0);
+          const daysOfInventoryRemaining =
+            dailyVelocity > 0 ? onHand / dailyVelocity : null;
+          const targetLabel = manualPar
+            ? `Target: PAR ${manualPar}`
+            : suggestedPar > 0
+              ? `Target: Sales PAR ${suggestedPar}`
+              : manualReorderPoint
+                ? `Target: Reorder ${manualReorderPoint}`
+                : "Target: Default 5";
           const status: OrderRow["status"] =
-            onHand <= 0 ? "Out" : onHand < par ? "Needs Reorder" : "Healthy";
+            currentInventory <= 0
+              ? "Out"
+              : currentInventory < targetStock
+                ? "Needs Reorder"
+                : "Healthy";
           const brandName = row.brand_name || "Unknown";
           const distributor = getOrderDistributorName(row.brand_name, row.distro);
 
@@ -357,12 +559,24 @@ export default function OrdersPage() {
             category: row.category,
             vendor: distributor,
             current_price: Number(row.current_price ?? 0),
-            onHand,
-            par,
-            suggested,
-            orderQty: suggested,
+            onHand: currentInventory,
+            manualPar,
+            manualReorderPoint,
+            suggestedPar,
+            suggestedReorderPoint,
+            targetStock,
+            targetStockSource,
+            reorderPointSource,
+            dailyVelocity,
+            daysOfInventoryRemaining,
+            targetSourceName,
+            suggestedQty,
+            orderQty: 0,
             status,
-            lineTotal: suggested * Number(row.current_price ?? 0),
+            lineTotal: 0,
+            par: manualPar ?? 0,
+            reorder_point: reorderPoint,
+            targetLabel,
           };
         }) ?? [];
 
@@ -382,18 +596,11 @@ export default function OrdersPage() {
         .toLowerCase()
         .includes(search.toLowerCase());
 
-      const availableCredit =
-        creditTotals.get(creditKey(r.vendor, r.brand_name))?.availableCredit ?? 0;
-      const matchesFilter =
-        orderFilter === "needs"
-          ? r.onHand <= r.par
-          : orderFilter === "credit"
-            ? availableCredit > 0
-            : true;
+      const matchesFilter = orderFilter === "needs" ? r.suggestedQty > 0 : true;
 
       return matchesSearch && matchesFilter;
     });
-  }, [creditTotals, orderFilter, rows, search]);
+  }, [orderFilter, rows, search]);
 
   const groupedRows = useMemo(
     () => groupRowsByDistributorAndBrand(filtered, creditTotals),
@@ -411,18 +618,26 @@ export default function OrdersPage() {
   }, [rows]);
 
   const selected = rows.filter((r) => r.orderQty > 0);
+  const needsOrderCount = rows.filter((r) => r.suggestedQty > 0).length;
 
-  const groupedByVendor = useMemo(() => {
-    const map: Record<string, Record<string, OrderRow[]>> = {};
+  const selectedGroups = useMemo(
+    () => groupSelectedRowsByDistributorAndBrand(selected),
+    [selected]
+  );
 
-    selected.forEach((row) => {
-      if (!map[row.vendor]) map[row.vendor] = {};
-      if (!map[row.vendor][row.brand_name]) map[row.vendor][row.brand_name] = [];
-      map[row.vendor][row.brand_name].push(row);
-    });
-
-    return map;
-  }, [selected]);
+  const selectedTotals = useMemo(
+    () =>
+      selected.reduce(
+        (totals, row) => {
+          totals.itemCount += 1;
+          totals.quantity += row.orderQty;
+          totals.lineTotal += row.lineTotal;
+          return totals;
+        },
+        { itemCount: 0, quantity: 0, lineTotal: 0 }
+      ),
+    [selected]
+  );
 
   function getAvailableCredit(distributor: string, vendorName: string) {
     return creditTotals.get(creditKey(distributor, vendorName))?.availableCredit ?? 0;
@@ -475,17 +690,21 @@ export default function OrdersPage() {
             }
           : r
       )
-    );
+      );
   }
 
-  function resetQty(id: string) {
+  function removeItem(id: string) {
+    updateQty(id, 0);
+  }
+
+  function useSuggestedQty(id: string) {
     setRows((prev) =>
       prev.map((r) =>
         r.id === id
           ? {
               ...r,
-              orderQty: r.suggested,
-              lineTotal: r.suggested * r.current_price,
+              orderQty: r.suggestedQty,
+              lineTotal: r.suggestedQty * r.current_price,
             }
           : r
       )
@@ -495,12 +714,12 @@ export default function OrdersPage() {
   function addAllLowItems(distributorName: string) {
     setRows((prev) =>
       prev.map((row) => {
-        if (row.vendor !== distributorName || row.onHand > row.par) return row;
+        if (row.vendor !== distributorName || row.onHand > row.targetStock) return row;
 
         return {
           ...row,
-          orderQty: row.suggested,
-          lineTotal: row.suggested * row.current_price,
+          orderQty: row.suggestedQty,
+          lineTotal: row.suggestedQty * row.current_price,
         };
       })
     );
@@ -576,7 +795,7 @@ export default function OrdersPage() {
       getCompactDisplayName(row.product_name, row.brand_name),
       row.sku || "",
       row.onHand,
-      row.par,
+      row.targetStock,
       row.orderQty,
     ]);
     const csvContent = [headers, ...csvRows]
@@ -598,8 +817,8 @@ export default function OrdersPage() {
     URL.revokeObjectURL(url);
   }
 
-  async function createDraft() {
-    const lines = rows
+  async function createDraftOrder(linesSource: OrderRow[]) {
+    const lines = linesSource
       .filter((row) => row.orderQty > 0)
       .map((row) => ({
         product_id: row.id,
@@ -608,8 +827,7 @@ export default function OrdersPage() {
       }));
 
     if (lines.length === 0) {
-      alert("No order quantities entered.");
-      return;
+      return null;
     }
 
     const res = await fetch("/api/create-order", {
@@ -623,38 +841,52 @@ export default function OrdersPage() {
     const data = await res.json();
 
     if (!res.ok || !data.success) {
-      alert(data.error || "Could not create draft.");
-      return;
+      throw new Error(data.error || "Could not create draft.");
     }
 
-    setDraftOrderId(data.order_id);
-    setOrderStatus("draft");
-    alert("Draft order created.");
+    return String(data.order_id ?? "");
   }
 
   async function submitForApproval() {
-    if (!draftOrderId) {
-      alert("Create a draft first.");
+    const selectedLines = rows.filter((row) => row.orderQty > 0);
+
+    if (selectedLines.length === 0) {
+      alert("No order quantities entered.");
       return;
     }
 
-    const res = await fetch("/api/submit-order", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ order_id: draftOrderId }),
-    });
+    let orderId = draftOrderId;
 
-    const data = await res.json();
+    try {
+      if (!orderId) {
+        orderId = await createDraftOrder(selectedLines);
+        if (!orderId) {
+          alert("No order quantities entered.");
+          return;
+        }
+      }
 
-    if (!res.ok || !data.success) {
-      alert(data.error || "Could not submit order.");
-      return;
+      const res = await fetch("/api/submit-order", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ order_id: orderId }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        alert(data.error || "Could not submit order.");
+        return;
+      }
+
+      setDraftOrderId(orderId);
+      setOrderStatus("submitted");
+      alert("Order submitted for approval.");
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Could not submit order.");
     }
-
-    setOrderStatus("submitted");
-    alert("Order submitted for approval.");
   }
 
   if (loading) {
@@ -700,17 +932,9 @@ export default function OrdersPage() {
               >
                 Needs Order
               </Button>
-              <Button
-                variant="ghost"
-                className={`min-h-10 rounded-none border-l border-border px-3 ${
-                  orderFilter === "credit"
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                    : "bg-card text-foreground hover:bg-muted"
-                }`}
-                onClick={() => setOrderFilter("credit")}
-              >
-                Has Credit
-              </Button>
+              <div className="flex items-center border-l border-border bg-card px-3 text-xs text-muted-foreground">
+                Needs Order Count: {needsOrderCount}
+              </div>
             </div>
           </div>
 
@@ -902,7 +1126,7 @@ export default function OrdersPage() {
                                     row={row}
                                     brandName={brandGroup.name}
                                     onAdjust={adjust}
-                                    onReset={resetQty}
+                                    onUseSuggested={useSuggestedQty}
                                     onUpdateQty={updateQty}
                                   />
                                 ))}
@@ -919,83 +1143,201 @@ export default function OrdersPage() {
 
             {filtered.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-                No order items match your filters.
+                {orderFilter === "needs"
+                  ? "No items need ordering based on current inventory and targets. Check Current/Target/Suggested values in All Items."
+                  : "No order items match your filters."}
               </div>
             ) : null}
           </div>
         </div>
 
-        <aside className="h-auto w-full border-t border-border bg-muted p-4 lg:sticky lg:top-0 lg:h-screen lg:w-80 lg:overflow-y-auto lg:border-l lg:border-t-0">
-          <div className="mb-4 flex items-center gap-2">
-            <ShoppingCart size={18} />
-            <h2 className="font-semibold">Order Review</h2>
-          </div>
-
-          <div className="mb-4 rounded bg-background p-3 text-sm">
-            <div className="text-muted-foreground">Status</div>
-            <div className="font-semibold">
-              {orderStatus === "none" && "Not Created"}
-              {orderStatus === "draft" && "Draft Created"}
-              {orderStatus === "submitted" && "Submitted for Approval"}
-            </div>
-          </div>
-
-          {selected.length === 0 && (
-            <div className="text-sm text-muted-foreground">No items selected yet.</div>
-          )}
-
-          {Object.entries(groupedByVendor).map(([distributor, brands]) => (
-            <div key={distributor} className="mb-4">
-              <div className="mb-1 text-sm font-semibold text-muted-foreground">
-                {distributor}
+        <aside className="w-full border-t border-border bg-muted/80 p-4 lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:w-[24rem] lg:overflow-y-auto lg:border-l lg:border-t-0">
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-border bg-background p-4 shadow-sm">
+              <div className="flex items-center gap-2">
+                <ShoppingCart size={18} />
+                <h2 className="font-semibold">Order Review</h2>
               </div>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="rounded-xl border border-border bg-card px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+                    Items
+                  </div>
+                  <div className="mt-1 text-lg font-semibold">{selectedTotals.itemCount}</div>
+                </div>
+                <div className="rounded-xl border border-border bg-card px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+                    Units
+                  </div>
+                  <div className="mt-1 text-lg font-semibold">{selectedTotals.quantity}</div>
+                </div>
+                <div className="rounded-xl border border-border bg-card px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+                    Est Cost
+                  </div>
+                  <div className="mt-1 text-lg font-semibold">
+                    {formatCurrency(selectedTotals.lineTotal)}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+                <div className="flex items-center justify-between">
+                  <span>Status</span>
+                  <span className="font-semibold text-foreground">
+                    {orderStatus === "none" && "Not Created"}
+                    {orderStatus === "draft" && "Draft Created"}
+                    {orderStatus === "submitted" && "Submitted for Approval"}
+                  </span>
+                </div>
+                {draftOrderId ? (
+                  <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                    Draft ID: {draftOrderId}
+                  </div>
+                ) : null}
+              </div>
+            </div>
 
-              {Object.entries(brands).map(([brandName, items]) => {
-                const availableCredit = getAvailableCredit(distributor, brandName);
+            {selected.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
+                No items selected yet. Use <span className="font-medium text-foreground">Use Suggested</span> on any item you want to add.
+              </div>
+            ) : null}
 
-                return (
-                  <div key={`${distributor}__${brandName}`} className="mb-2">
-                    <div className="mb-1 text-xs font-semibold text-muted-foreground">
-                      {brandName}
-                      <span
-                        className={`ml-2 ${
-                          availableCredit > 0 ? "text-green-300" : "text-muted-foreground"
-                        }`}
-                      >
-                        Available Credit: {formatCurrency(availableCredit)}
-                      </span>
-                    </div>
-                    {availableCredit > 0 ? (
-                      <div className="mb-1 rounded border border-green-500/20 bg-green-500/10 px-2 py-1 text-xs leading-snug text-green-300">
-                        Credit available — consider applying before payment.
+            <div className="space-y-3">
+              {selectedGroups.map((distributorGroup) => (
+                <section
+                  key={distributorGroup.name}
+                  className="rounded-2xl border border-border bg-background shadow-sm"
+                >
+                  <div className="border-b border-border px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-foreground">
+                          {distributorGroup.name}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {distributorGroup.itemsCount} selected items
+                        </div>
                       </div>
-                    ) : null}
+                      <div className="text-right text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+                        <div>{formatCurrency(
+                          distributorGroup.brands.reduce(
+                            (total, brand) =>
+                              total + brand.items.reduce((sum, item) => sum + item.lineTotal, 0),
+                            0
+                          )
+                        )}</div>
+                      </div>
+                    </div>
+                  </div>
 
-                    {items.map((item) => (
-                      <div key={item.id} className="flex justify-between gap-3 text-sm">
-                        <span className="truncate">{item.product_name}</span>
-                        <span>{item.orderQty}</span>
+                  <div className="space-y-3 p-3">
+                    {distributorGroup.brands.map((brandGroup) => (
+                      <div
+                        key={`${distributorGroup.name}__${brandGroup.name}`}
+                        className="space-y-2"
+                      >
+                        <div className="flex items-center justify-between gap-2 px-1">
+                          <div className="truncate text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                            {brandGroup.name}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground">
+                            {brandGroup.items.length} lines
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          {brandGroup.items.map((item) => (
+                            <div
+                              key={item.id}
+                              className="rounded-xl border border-border bg-muted/40 p-3"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium text-foreground">
+                                    {getCompactDisplayName(item.product_name, item.brand_name)}
+                                  </div>
+                                  <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                                    <span>Inventory {item.onHand}</span>
+                                    <span>Velocity {formatVelocity(item.dailyVelocity)}/day</span>
+                                    <span>Suggested PAR {item.suggestedPar || item.targetStock}</span>
+                                    <span>Target {item.targetStockSource}</span>
+                                    <span>ROP {item.reorderPointSource}</span>
+                                    <span>Days left {formatDaysRemaining(item.daysOfInventoryRemaining)}</span>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => removeItem(item.id)}
+                                  className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-semibold text-foreground transition hover:bg-muted"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+
+                              <div className="mt-3 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="outline"
+                                    className="size-9"
+                                    onClick={() => adjust(item.id, -1)}
+                                    aria-label={`Decrease ${item.product_name}`}
+                                  >
+                                    <Minus size={14} />
+                                  </Button>
+
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={item.orderQty}
+                                    onChange={(event) => updateQty(item.id, Number(event.target.value))}
+                                    className="h-9 w-16 rounded border border-border bg-background text-center text-sm font-semibold text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
+                                    aria-label={`Order quantity for ${item.product_name}`}
+                                  />
+
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="outline"
+                                    className="size-9"
+                                    onClick={() => adjust(item.id, 1)}
+                                    aria-label={`Increase ${item.product_name}`}
+                                  >
+                                    <Plus size={14} />
+                                  </Button>
+                                </div>
+
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-9 px-3 text-xs"
+                                  onClick={() => useSuggestedQty(item.id)}
+                                >
+                                  Use Suggested
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ))}
                   </div>
-                );
-              })}
+                </section>
+              ))}
             </div>
-          ))}
 
-          <div className="mt-4 border-t border-border pt-4">
-            <Button className="mb-2 min-h-10 w-full" onClick={createDraft}>
-              Create Draft
-            </Button>
-
-            <Button
-              variant="outline"
-              className="min-h-10 w-full border-border bg-card text-foreground hover:bg-muted"
-              onClick={submitForApproval}
-              disabled={!draftOrderId || orderStatus === "submitted"}
-            >
-              Submit for Approval
-            </Button>
+            <div className="space-y-2 rounded-2xl border border-border bg-background p-4 shadow-sm">
+              <Button
+                className="min-h-10 w-full"
+                onClick={submitForApproval}
+                disabled={selected.length === 0 || orderStatus === "submitted"}
+              >
+                Submit for Approval
+              </Button>
+            </div>
           </div>
         </aside>
       </div>
@@ -1006,13 +1348,13 @@ export default function OrdersPage() {
 function OrderItemCard({
   brandName,
   onAdjust,
-  onReset,
+  onUseSuggested,
   onUpdateQty,
   row,
 }: {
   brandName: string;
   onAdjust: (id: string, delta: number) => void;
-  onReset: (id: string) => void;
+  onUseSuggested: (id: string) => void;
   onUpdateQty: (id: string, qty: number) => void;
   row: OrderRow;
 }) {
@@ -1035,9 +1377,18 @@ function OrderItemCard({
                 <span aria-hidden="true">·</span>
                 <span>On Hand {row.onHand}</span>
                 <span aria-hidden="true">·</span>
-                <span>Par {row.par}</span>
+                <span>{row.targetLabel}</span>
                 <span aria-hidden="true">·</span>
-                <span className="font-semibold text-foreground">Suggested: {row.suggested}</span>
+                <span>Velocity {formatVelocity(row.dailyVelocity)}/day</span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] leading-tight text-muted-foreground">
+                <span>Current: {row.onHand}</span>
+                <span aria-hidden="true">·</span>
+                <span>Target: {row.targetStock}</span>
+                <span aria-hidden="true">·</span>
+                <span>Suggested: {row.suggestedQty}</span>
+                <span aria-hidden="true">·</span>
+                <span className="font-medium text-foreground">Source: {row.targetSourceName}</span>
               </div>
             </div>
           </div>
@@ -1082,9 +1433,9 @@ function OrderItemCard({
             variant="outline"
             size="sm"
             className="min-h-10 px-3"
-            onClick={() => onReset(row.id)}
+            onClick={() => onUseSuggested(row.id)}
           >
-            Reset
+            Use Suggested
           </Button>
         </div>
       </div>

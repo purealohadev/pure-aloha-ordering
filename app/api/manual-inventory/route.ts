@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server"
+import {
+  buildInventoryProductLookup,
+  matchInventoryProductId,
+  type InventoryProductLookupRow,
+} from "@/app/lib/inventoryNormalization"
 import { asString } from "@/lib/import/shared"
 import { createServiceRoleClient } from "@/lib/supabase/service"
 import { loadPublicTableColumns } from "@/lib/supabase/table-columns"
@@ -7,6 +12,7 @@ type ManualInventoryRequest = {
   productName?: unknown
   brand?: unknown
   distributor?: unknown
+  barcode?: unknown
   currentQuantity?: unknown
   category?: unknown
   sku?: unknown
@@ -15,10 +21,6 @@ type ManualInventoryRequest = {
   notes?: unknown
   unitSize?: unknown
   packageSize?: unknown
-}
-
-function normalizeExactKey(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, " ")
 }
 
 function parseRequiredInteger(value: unknown, label: string) {
@@ -70,6 +72,7 @@ export async function POST(request: Request) {
     const productName = asString(body.productName)
     const brand = asString(body.brand)
     const distributor = asString(body.distributor)
+    const barcode = parseOptionalText(body.barcode)
     const currentQuantityResult = parseRequiredInteger(body.currentQuantity, "Current inventory quantity")
     const category = parseOptionalText(body.category)
     const sku = parseOptionalText(body.sku)
@@ -109,9 +112,19 @@ export async function POST(request: Request) {
       loadPublicTableColumns(supabase, "inventory"),
     ])
 
+    const productSelectFields = [
+      "id",
+      "sku",
+      productColumns.has("barcode") ? "barcode" : null,
+      "brand_name",
+      "product_name",
+    ]
+      .filter(Boolean)
+      .join(", ")
+
     const { data: products, error: productFetchError } = await supabase
       .from("products")
-      .select("id, brand_name, product_name")
+      .select(productSelectFields)
 
     if (productFetchError) {
       return NextResponse.json(
@@ -120,12 +133,23 @@ export async function POST(request: Request) {
       )
     }
 
-    const normalizedProductKey = `${normalizeExactKey(brand)}__${normalizeExactKey(productName)}`
-    const existingProduct = (products ?? []).find((row) => {
-      const rowBrand = asString((row as { brand_name?: unknown }).brand_name)
-      const rowProductName = asString((row as { product_name?: unknown }).product_name)
-      return `${normalizeExactKey(rowBrand)}__${normalizeExactKey(rowProductName)}` === normalizedProductKey
-    }) as { id: string } | undefined
+    const lookup = buildInventoryProductLookup(
+      (products ?? []) as unknown as InventoryProductLookupRow[]
+    )
+    const match = matchInventoryProductId(
+      {
+        sku,
+        barcode,
+        brand_name: brand,
+        product_name: productName,
+      },
+      lookup
+    )
+
+    const productRows = (products ?? []) as unknown as Array<{ id: string }>
+    const existingProduct = match
+      ? (productRows.find((row) => row.id === match.productId) as { id: string } | undefined)
+      : undefined
 
     const productPayload: Record<string, unknown> = {
       brand_name: brand,
@@ -209,7 +233,10 @@ export async function POST(request: Request) {
     }
 
     if (!productId) {
-      return NextResponse.json({ error: "Could not resolve product record." }, { status: 500 })
+      return NextResponse.json(
+        { error: "Could not resolve product record." },
+        { status: 500 }
+      )
     }
 
     const { data: inventoryRows, error: inventoryFetchError } = await supabase
@@ -276,6 +303,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
+      total_rows: 1,
+      matched_rows: existingProduct ? 1 : 0,
+      unmatched_rows: existingProduct ? 0 : 1,
+      skipped_rows: 0,
+      duplicate_rows_skipped: 0,
       created_product: createdProduct,
       created_inventory: createdInventory,
       product_id: productId,

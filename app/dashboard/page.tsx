@@ -10,6 +10,7 @@ import {
   TrendingDown,
 } from "lucide-react";
 import NavBar from "@/components/NavBar";
+import PosInventorySyncCard from "@/components/dashboard/PosInventorySyncCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -192,6 +193,8 @@ export default async function DashboardPage() {
             <ActionButton href="/orders" icon={ShoppingCart} label="Create / Review Orders" />
             <ActionButton href="/order-history" icon={ListChecks} label="Order History" />
           </section>
+
+          <PosInventorySyncCard />
 
           <Card className="border border-border/80 bg-card/95 shadow-sm">
             <CardHeader className="border-b border-border/70 pb-4">

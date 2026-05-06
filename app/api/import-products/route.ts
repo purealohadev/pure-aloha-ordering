@@ -1,4 +1,12 @@
 import { NextResponse } from "next/server";
+import { loadPublicTableColumns } from "@/lib/supabase/table-columns";
+import {
+  buildNormalizedProductKey,
+  normalizeBarcode,
+  normalizeBrandName,
+  normalizeProductName,
+  normalizeSku,
+} from "@/app/lib/inventoryNormalization";
 import {
   cleanProductRow,
   createServiceRoleClient,
@@ -22,14 +30,116 @@ type ProductUpsertRow = ProductImportRow & {
   distributor_locked?: boolean;
 };
 
+type ExistingProductRow = {
+  id: string;
+  sku: string | null;
+  barcode: string | null;
+  brand_name: string | null;
+  product_name: string | null;
+};
+
+type ExistingProductLookups = {
+  skuMap: Map<string, string>;
+  barcodeMap: Map<string, string>;
+  brandNameMap: Map<string, string>;
+};
+
 function normalizeLockedBrand(value: unknown) {
-  return String(value ?? "").trim().toLowerCase();
+  return normalizeBrandName(value);
+}
+
+function buildExistingProductLookups(products: ExistingProductRow[]) {
+  const skuMap = new Map<string, string>();
+  const barcodeMap = new Map<string, string>();
+  const brandNameMap = new Map<string, string>();
+
+  for (const product of products) {
+    const sku = normalizeSku(product.sku);
+    const barcode = normalizeBarcode(product.barcode);
+    const key = buildNormalizedProductKey(product.brand_name, product.product_name);
+
+    if (sku && !skuMap.has(sku)) {
+      skuMap.set(sku, product.id);
+    }
+
+    if (barcode && !barcodeMap.has(barcode)) {
+      barcodeMap.set(barcode, product.id);
+    }
+
+    if (key && !brandNameMap.has(key)) {
+      brandNameMap.set(key, product.id);
+    }
+  }
+
+  return { skuMap, barcodeMap, brandNameMap } satisfies ExistingProductLookups;
+}
+
+function buildProductPayload(
+  row: ProductUpsertRow,
+  productColumns: Set<string>
+) {
+  const payload: Record<string, unknown> = {
+    sku: row.sku,
+    brand_name: row.brand_name,
+    product_name: row.product_name,
+    category: row.category,
+    distro: row.distro,
+    current_price: row.current_price,
+    active: row.active,
+  };
+
+  if (productColumns.has("barcode")) {
+    payload.barcode = row.barcode ?? null;
+  }
+
+  if (productColumns.has("unit_cost") && row.unit_cost != null) {
+    payload.unit_cost = row.unit_cost;
+  }
+
+  if (productColumns.has("retail_price") && row.retail_price != null) {
+    payload.retail_price = row.retail_price;
+  }
+
+  if (productColumns.has("size") && row.size) {
+    payload.size = row.size;
+  }
+
+  if (productColumns.has("weight") && row.weight) {
+    payload.weight = row.weight;
+  }
+
+  if (productColumns.has("pack") && row.pack) {
+    payload.pack = row.pack;
+  }
+
+  if (productColumns.has("unit_size") && row.unit_size) {
+    payload.unit_size = row.unit_size;
+  }
+
+  if (productColumns.has("package_size") && row.package_size) {
+    payload.package_size = row.package_size;
+  }
+
+  if (productColumns.has("reporting_unit") && row.reporting_unit) {
+    payload.reporting_unit = row.reporting_unit;
+  }
+
+  if (productColumns.has("notes") && row.notes) {
+    payload.notes = row.notes;
+  }
+
+  if (row.distributor_locked && productColumns.has("distributor_locked")) {
+    payload.distributor_locked = true;
+  }
+
+  return payload;
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const rows: ImportUploadRow[] = Array.isArray(body?.rows) ? body.rows : [];
+    const createOnly = Boolean(body?.createOnly);
 
     if (!rows.length) {
       return NextResponse.json({ error: "No rows provided." }, { status: 400 });
@@ -45,9 +155,22 @@ export async function POST(request: Request) {
 
     const productRows = dedupeProducts(cleanedRows);
     const supabase = createServiceRoleClient();
+    const productColumns = await loadPublicTableColumns(supabase, "products");
+
+    const existingProductSelectFields = [
+      "id",
+      "sku",
+      productColumns.has("barcode") ? "barcode" : null,
+      "brand_name",
+      "product_name",
+      "distro",
+    ]
+      .filter(Boolean)
+      .join(", ");
+
     const { data: existingProducts, error: existingProductsError } = await supabase
       .from("products")
-      .select("id, sku, brand_name, product_name, distro");
+      .select(existingProductSelectFields);
 
     if (existingProductsError) {
       return NextResponse.json(
@@ -56,8 +179,11 @@ export async function POST(request: Request) {
       );
     }
 
+    const existingLookups = buildExistingProductLookups(
+      (existingProducts ?? []) as unknown as ExistingProductRow[]
+    );
     const priceLookup = buildPriceProductLookup(
-      (existingProducts ?? []) as PriceProductLookupRow[]
+      (existingProducts ?? []) as unknown as PriceProductLookupRow[]
     );
 
     const importBrandKeys = Array.from(
@@ -88,45 +214,77 @@ export async function POST(request: Request) {
       }
     }
 
-    const brandNameDedupedMap = new Map<string, ProductUpsertRow>();
+    const dedupedPayloads = new Map<string, ProductUpsertRow>();
     let skippedDistributorOverwrites = 0;
+    let skippedDuplicateProducts = 0;
     let priceSnapshotsCreated = 0;
     let priceAlertsCreated = 0;
     let priceAlertsSkipped = 0;
 
     for (const row of productRows) {
       const brand = normalizeLockedBrand(row.brand_name);
-      const name = String(row.product_name ?? "").trim().toLowerCase();
+      const name = normalizeProductName(row.product_name);
       const key = `${brand}__${name}`;
       const isLockedBrand = lockedDistributorByBrand.has(brand);
       const lockedDistributor = isLockedBrand ? lockedDistributorByBrand.get(brand) ?? null : null;
+
+      const normalizedSku = normalizeSku(row.sku);
+      const normalizedBarcode = normalizeBarcode(row.barcode);
+      const normalizedKey = buildNormalizedProductKey(row.brand_name, row.product_name);
+      const keyMatch = normalizedKey ? existingLookups.brandNameMap.get(normalizedKey) ?? null : null;
+      const skuMatch = normalizedSku ? existingLookups.skuMap.get(normalizedSku) ?? null : null;
+      const barcodeMatch = normalizedBarcode
+        ? existingLookups.barcodeMap.get(normalizedBarcode)
+        : null;
+
+      const duplicateConflict = createOnly
+        ? Boolean(keyMatch || skuMatch || barcodeMatch)
+        : Boolean((skuMatch && skuMatch !== keyMatch) || (barcodeMatch && barcodeMatch !== keyMatch));
+
+      if (duplicateConflict) {
+        skippedDuplicateProducts += 1;
+        continue;
+      }
 
       if (isLockedBrand && row.distro !== lockedDistributor) {
         skippedDistributorOverwrites += 1;
       }
 
-      brandNameDedupedMap.set(key, {
-        sku: row.sku,
-        brand_name: row.brand_name,
-        product_name: row.product_name,
-        category: row.category,
-        distro: isLockedBrand ? lockedDistributor : row.distro,
-        current_price: row.current_price,
-        active: row.active,
-        
+      dedupedPayloads.set(key, {
+        ...row,
+        distro: lockedDistributor ?? row.distro,
         ...(isLockedBrand ? { distributor_locked: true } : {}),
       });
     }
 
-    const dedupedProductsByName = Array.from(brandNameDedupedMap.values());
+    const productPayloads = Array.from(dedupedPayloads.values()).map((row) =>
+      buildProductPayload(row, productColumns)
+    );
 
-    const { data: upsertedProducts, error } = await supabase
-      .from("products")
-      .upsert(dedupedProductsByName, {
-        onConflict: "brand_name,product_name",
-        ignoreDuplicates: false,
-      })
-      .select("id, sku, brand_name, product_name, distro");
+    if (!productPayloads.length) {
+      return NextResponse.json({
+        ok: true,
+        count: 0,
+        created_count: 0,
+        skipped_rows: cleanedRows.length,
+        duplicate_rows_skipped: skippedDuplicateProducts,
+        skipped_distributor_overwrites: skippedDistributorOverwrites,
+        price_snapshots_created: 0,
+        price_alerts_created: 0,
+        price_alerts_skipped: 0,
+      });
+    }
+
+    const productOperation = createOnly
+      ? supabase.from("products").insert(productPayloads)
+      : supabase.from("products").upsert(productPayloads, {
+          onConflict: "brand_name,product_name",
+          ignoreDuplicates: false,
+        });
+
+    const { data: upsertedProducts, error } = await productOperation.select(
+      "id, sku, brand_name, product_name, distro"
+    );
 
     if (error) {
       return NextResponse.json(
@@ -135,10 +293,12 @@ export async function POST(request: Request) {
       );
     }
 
-    for (const row of dedupedProductsByName) {
+    for (const row of productPayloads) {
       const unitCost = cleanImportedUnitCost({
-  current_price: row.current_price,
-});
+        current_price: row.current_price,
+        unit_cost: (row as { unit_cost?: number | null }).unit_cost,
+        price: (row as { retail_price?: number | null }).retail_price,
+      });
 
       if (unitCost == null) {
         continue;
@@ -282,7 +442,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      count: productRows.length,
+      count: productPayloads.length,
+      created_count: createOnly ? productPayloads.length : productPayloads.length,
+      skipped_rows: cleanedRows.length - productPayloads.length,
+      duplicate_rows_skipped: skippedDuplicateProducts,
       skipped_distributor_overwrites: skippedDistributorOverwrites,
       price_snapshots_created: priceSnapshotsCreated,
       price_alerts_created: priceAlertsCreated,
@@ -298,7 +461,10 @@ export async function POST(request: Request) {
   }
 }
 
-async function getPreviousUnitCost(supabase: ReturnType<typeof createServiceRoleClient>, productId: string) {
+async function getPreviousUnitCost(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  productId: string
+) {
   const { data, error } = await supabase
     .from("price_history")
     .select("unit_cost")

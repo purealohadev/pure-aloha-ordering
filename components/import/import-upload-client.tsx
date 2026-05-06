@@ -110,37 +110,95 @@ export default function ImportUploadClient({
       const normalized: ImportUploadRow[] = dataRows
         .map((values) => {
           const row = Object.fromEntries(headers.map((header, index) => [header, values[index]]));
-          const brand = asNullableString(row.brand || row.brand_name);
+          const brand = asNullableString(
+            row.brand ||
+              row.brand_name ||
+              row.third_party_display_name ||
+              row.third_party_name ||
+              row.cultivator_name
+          );
           const name = asString(
-            row.name || row.product_name || row.product || row.item || row.description
+            row.name ||
+              row.product_name ||
+              row.product ||
+              row.item ||
+              row.description ||
+              row.variant_name
+          );
+          const sku = asString(
+            row.sku ||
+              row.product_sku ||
+              row.item_sku ||
+              row.upc ||
+              row.barcode ||
+              row.ean ||
+              row.gtin ||
+              row.id ||
+              `${asString(row.brand_name || row.brand)}-${name}`
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-+|-+$/g, "")
+          );
+          const category = asNullableString(
+            row.category || row.type || row.category_group || row.product_type || row.variant_type
+          );
+          const vendor = asNullableString(
+            row.vendor ||
+              row.distributor ||
+              row.distro ||
+              row.supplier ||
+              row.supplier_name ||
+              row.source_label
+          );
+          const inventory = asInt(
+            row.inventory ||
+              row.qty ||
+              row.quantity ||
+              row.stock ||
+              row.current_inventory ||
+              row.on_hand ||
+              row.last_audit_quantity,
+            0
+          );
+          const unitCost = asNumber(
+            row.unit_cost ||
+              row.cost ||
+              row.wholesale_cost ||
+              row.current_cost ||
+              row.purchase_cost
+          );
+          const retailPrice = asNumber(
+            row.retail_price || row.price || row.total_price || row.current_price || row.msrp
           );
 
           return {
-            sku: asString(
-              row.sku ||
-                row.product_sku ||
-                row.item_sku ||
-                row.upc ||
-                row.barcode ||
-                row.id ||
-                `${asString(row.brand_name || row.brand)}-${name}`
-                  .toLowerCase()
-                  .replace(/[^a-z0-9]+/g, "-")
-                  .replace(/^-+|-+$/g, "")
-            ),
+            sku,
+            barcode: asNullableString(row.barcode || row.upc || row.ean || row.gtin),
             name,
             brand,
-            vendor: asNullableString(row.vendor || row.distributor || row.distro),
-            category: asNullableString(row.category || row.type || row.category_group),
-            price: asNumber(
-              row.price || row.unit_price || row.cost || row.retail_price || row.base_price
-            ),
-            inventory: asInt(
-              row.inventory || row.qty || row.quantity || row.stock || row.current_inventory,
-              0
-            ),
-            reorder_point: asInt(row.reorder_point || row.par || row.min, 0),
+            vendor,
+            category,
+            price: retailPrice,
+            unit_cost: unitCost,
+            retail_price: retailPrice,
+            inventory,
+            reorder_point: asInt(row.reorder_point || row.par || row.min || row.par_level, 0),
             is_active: String(row.is_active ?? "true").toLowerCase() !== "false",
+            size: asNullableString(
+              row.size || row["serving_size_/_dosage"] || row["serving_size_/dosage"] || row.reporting_unit_of_measure
+            ),
+            weight: asNullableString(row.weight || row.calculated_weight || row.weight_with_paper),
+            pack: asNullableString(
+              row.pack ||
+                row.pack_size ||
+                row.servings ||
+                row["#_of_servings"] ||
+                row.packaged_by
+            ),
+            unit_size: asNullableString(row.unit_size || row.reporting_unit_of_measure),
+            package_size: asNullableString(row.package_size || row.pack_size || row.servings),
+            reporting_unit: asNullableString(row.reporting_unit_of_measure || row.reporting_unit),
+            notes: asNullableString(row.notes || row.inventory_notes),
           };
         })
         .filter((row) => row.sku && row.name);
@@ -168,7 +226,11 @@ export default function ImportUploadClient({
 
     const chunks = chunkArray(rows, 500);
     let processed = 0;
+    let totalRows = 0;
+    let matchedRows = 0;
     let nextUnmatchedCount = 0;
+    let nextSkippedRows = 0;
+    let nextDuplicateRowsSkipped = 0;
     const nextUnmatchedSample: UnmatchedInventoryRow[] = [];
 
     try {
@@ -188,9 +250,13 @@ export default function ImportUploadClient({
         }
 
         processed += data.count ?? chunks[i].length;
+        totalRows += data.total_rows ?? chunks[i].length;
+        matchedRows += data.matched_rows ?? data.count ?? chunks[i].length;
 
         if (isInventoryMode) {
           nextUnmatchedCount += data.unmatched_count || 0;
+          nextSkippedRows += data.skipped_rows || 0;
+          nextDuplicateRowsSkipped += data.duplicate_rows_skipped || 0;
           nextUnmatchedSample.push(...((data.unmatched_sample || []) as UnmatchedInventoryRow[]));
         }
       }
@@ -203,7 +269,11 @@ export default function ImportUploadClient({
       }
 
       setProgress("");
-      setResult(`Import complete: ${processed} ${resultLabel || "rows processed"}.`);
+      setResult(
+        isInventoryMode
+          ? `Import complete: ${processed} ${resultLabel || "rows processed"} from ${totalRows} source rows. Matched ${matchedRows}, unmatched ${nextUnmatchedCount}, skipped ${nextSkippedRows}, duplicates skipped ${nextDuplicateRowsSkipped}.`
+          : `Import complete: ${processed} ${resultLabel || "rows processed"}.`
+      );
     } catch (error) {
       setProgress("");
       setResult(error instanceof Error ? error.message : "Import failed.");
@@ -229,40 +299,47 @@ export default function ImportUploadClient({
         const key = `${String(brand).trim().toLowerCase()}__${String(name).trim().toLowerCase()}`;
 
         if (!exactMap.has(key)) {
-          const sku =
-            brand.replace(/\s+/g, "").toUpperCase().slice(0, 6) +
-            "-" +
-            name.replace(/\s+/g, "").toUpperCase().slice(0, 10);
-
           const lowerName = String(name).toLowerCase();
-
-          let category = "Misc";
-          if (
-            lowerName.includes("flower") ||
-            lowerName.includes("3.5") ||
-            lowerName.includes("14g")
-          ) {
-            category = "Flower";
-          } else if (lowerName.includes("preroll") || lowerName.includes("pre roll")) {
-            category = "Preroll";
-          } else if (lowerName.includes("vape") || lowerName.includes("cartridge")) {
-            category = "Vape";
-          } else if (lowerName.includes("gummy") || lowerName.includes("chocolate")) {
-            category = "Edible";
-          } else if (lowerName.includes("drink") || lowerName.includes("tea")) {
-            category = "Beverage";
-          }
+          const sku = item.sku || generateSuggestedSku(brand, name);
+          const barcode = item.barcode ?? null;
+          const suggestedCategory =
+            item.category ||
+            (lowerName.includes("flower") || lowerName.includes("3.5") || lowerName.includes("14g")
+              ? "Flower"
+              : lowerName.includes("preroll") || lowerName.includes("pre roll")
+                ? "Preroll"
+                : lowerName.includes("vape") || lowerName.includes("cartridge")
+                  ? "Vape"
+                  : lowerName.includes("gummy") || lowerName.includes("chocolate")
+                    ? "Edible"
+                    : lowerName.includes("drink") || lowerName.includes("tea")
+                      ? "Beverage"
+                      : "Misc");
 
           exactMap.set(key, {
             sku,
+            barcode,
             name,
             brand,
-            vendor: acceptedUnmatchedBrandDistributors[getUnmatchedBrandKey(item)] ?? null,
-            category,
-            price: 0,
+            vendor:
+              acceptedUnmatchedBrandDistributors[getUnmatchedBrandKey(item)] ??
+              item.vendor ??
+              item.suggested_distributor ??
+              null,
+            category: suggestedCategory,
+            price: item.retail_price ?? item.price ?? 0,
+            unit_cost: item.unit_cost ?? null,
+            retail_price: item.retail_price ?? item.price ?? 0,
             inventory: item.inventory || 0,
             reorder_point: item.reorder_point || 0,
             is_active: true,
+            size: item.size ?? null,
+            weight: item.weight ?? null,
+            pack: item.pack ?? null,
+            unit_size: item.unit_size ?? null,
+            package_size: item.package_size ?? null,
+            reporting_unit: item.reporting_unit ?? null,
+            notes: item.notes ?? null,
           });
         }
       }
@@ -272,7 +349,7 @@ export default function ImportUploadClient({
       const res = await fetch("/api/import-products", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ rows, createOnly: true }),
       });
 
       const data = await res.json();
@@ -281,7 +358,9 @@ export default function ImportUploadClient({
         throw new Error(data?.error || "Failed to create products from unmatched items.");
       }
 
-      setResult(`Created ${data.count || rows.length} products from unmatched items.`);
+      setResult(
+        `Created ${data.created_count || data.count || rows.length} products from unmatched items. Skipped ${data.duplicate_rows_skipped || 0} duplicates.`
+      );
       setUnmatchedSample([]);
       setUnmatchedCount(0);
       setProgress("Products created. Re-running inventory import...");
@@ -304,11 +383,20 @@ export default function ImportUploadClient({
 
     const headers = [
       "sku",
+      "barcode",
       "brand",
       "name",
       "category",
       "vendor",
       "price",
+      "unit_cost",
+      "retail_price",
+      "size",
+      "weight",
+      "pack",
+      "unit_size",
+      "package_size",
+      "reporting_unit",
       "is_active",
       "inventory",
       "reorder_point",
@@ -325,12 +413,21 @@ export default function ImportUploadClient({
         const name = item.name || "Unnamed";
 
         return [
-          generateSuggestedSku(brand, name),
+          item.sku || generateSuggestedSku(brand, name),
+          item.barcode || "",
           brand,
           name,
-          guessCategory(name),
+          item.category || guessCategory(name),
           acceptedUnmatchedBrandDistributors[getUnmatchedBrandKey(item)] ?? "",
-          0,
+          item.price ?? "",
+          item.unit_cost ?? "",
+          item.retail_price ?? item.price ?? "",
+          item.size ?? "",
+          item.weight ?? "",
+          item.pack ?? "",
+          item.unit_size ?? "",
+          item.package_size ?? "",
+          item.reporting_unit ?? "",
           true,
           item.inventory || 0,
           item.reorder_point || 0,

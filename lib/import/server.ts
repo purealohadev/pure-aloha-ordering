@@ -1,28 +1,43 @@
 import { createClient } from "@supabase/supabase-js";
 import { resolveDistributorBrand } from "@/lib/inventory/distributors";
 import {
+  buildNormalizedProductKey,
+  normalizeBarcode,
+  normalizeLooseProductName,
+  normalizeSku,
+} from "@/app/lib/inventoryNormalization";
+import {
   asNumber,
   asString,
-  extractCoreProductName,
   makeProductKey,
-  normalizeLooseName,
   type ImportUploadRow,
   type UnmatchedInventoryRow,
 } from "@/lib/import/shared";
 
 export type ProductImportRow = {
   sku: string;
+  barcode?: string | null;
   brand_name: string;
   product_name: string;
   category: string | null;
   distro: string | null;
   current_price: number;
   active: boolean;
+  unit_cost?: number | null;
+  retail_price?: number | null;
+  size?: string | null;
+  weight?: string | null;
+  pack?: string | null;
+  unit_size?: string | null;
+  package_size?: string | null;
+  reporting_unit?: string | null;
+  notes?: string | null;
 };
 
 type ProductLookupRow = {
   id: string;
   sku: string | null;
+  barcode?: string | null;
   brand_name: string | null;
   product_name: string;
 };
@@ -60,12 +75,22 @@ export function cleanProductRow(row: Partial<ImportUploadRow>): ProductImportRow
 
   return {
     sku,
+    barcode: asString(row.barcode) || null,
     brand_name: brandName,
     product_name: name,
     category: asString(row.category) || null,
     distro,
     current_price: asNumber(row.price) ?? 0,
     active: row.is_active !== false,
+    unit_cost: asNumber(row.unit_cost),
+    retail_price: asNumber(row.retail_price),
+    size: asString(row.size) || null,
+    weight: asString(row.weight) || null,
+    pack: asString(row.pack) || null,
+    unit_size: asString(row.unit_size) || null,
+    package_size: asString(row.package_size) || null,
+    reporting_unit: asString(row.reporting_unit) || null,
+    notes: asString(row.notes) || null,
   };
 }
 
@@ -79,119 +104,83 @@ export function dedupeProducts(rows: ProductImportRow[]) {
   return Array.from(map.values());
 }
 
+type ProductLookupMaps = ReturnType<typeof buildProductLookupMaps>;
+
 function buildProductLookupMaps(products: ProductLookupRow[]) {
   const productMap = new Map<string, string>();
-  const productNameOnlyMap = new Map<string, string>();
   const productSkuMap = new Map<string, string>();
-  const productLooseNameMap = new Map<string, string>();
-  const productCoreNameMap = new Map<string, string>();
-  const productContainsMap = new Map<string, string>();
-  const productNormalizedBrandNameMap = new Map<string, string>();
+  const productBarcodeMap = new Map<string, string>();
+  const productLooseKeyMap = new Map<string, string>();
 
   for (const product of products) {
-    productMap.set(makeProductKey(product.brand_name, product.product_name), product.id);
+    const normalizedKey = buildNormalizedProductKey(product.brand_name, product.product_name);
 
-    const normalizedBrand = normalizeLooseName(product.brand_name);
-    const normalizedProductName = normalizeLooseName(product.product_name);
-    const normalizedBrandNameKey = `${normalizedBrand}__${normalizedProductName}`;
-
-    if (
-      normalizedBrand &&
-      normalizedProductName &&
-      !productNormalizedBrandNameMap.has(normalizedBrandNameKey)
-    ) {
-      productNormalizedBrandNameMap.set(normalizedBrandNameKey, product.id);
+    if (normalizedKey && !productMap.has(normalizedKey)) {
+      productMap.set(normalizedKey, product.id);
     }
 
-    const normalizedName = asString(product.product_name).toLowerCase();
-    if (normalizedName && !productNameOnlyMap.has(normalizedName)) {
-      productNameOnlyMap.set(normalizedName, product.id);
-    }
-
-    const sku = asString(product.sku);
+    const sku = normalizeSku(product.sku);
     if (sku && !productSkuMap.has(sku)) {
       productSkuMap.set(sku, product.id);
     }
 
-    const looseName = normalizeLooseName(product.product_name);
-    if (looseName && !productLooseNameMap.has(looseName)) {
-      productLooseNameMap.set(looseName, product.id);
+    const barcode = normalizeBarcode(product.barcode);
+    if (barcode && !productBarcodeMap.has(barcode)) {
+      productBarcodeMap.set(barcode, product.id);
     }
 
-    const coreName = extractCoreProductName(product.product_name);
-    if (coreName && !productCoreNameMap.has(coreName)) {
-      productCoreNameMap.set(coreName, product.id);
-    }
-
-    if (coreName && !productContainsMap.has(coreName)) {
-      productContainsMap.set(coreName, product.id);
-    }
-
-    if (looseName && !productContainsMap.has(looseName)) {
-      productContainsMap.set(looseName, product.id);
+    const looseKey = `${normalizeLooseProductName(product.brand_name)}__${normalizeLooseProductName(
+      product.product_name
+    )}`;
+    if (looseKey && !productLooseKeyMap.has(looseKey)) {
+      productLooseKeyMap.set(looseKey, product.id);
     }
   }
 
   return {
     productMap,
-    productNameOnlyMap,
     productSkuMap,
-    productLooseNameMap,
-    productCoreNameMap,
-    productContainsMap,
-    productNormalizedBrandNameMap,
+    productBarcodeMap,
+    productLooseKeyMap,
   };
 }
 
 function matchProductId(
   row: Partial<ImportUploadRow>,
-  lookup: ReturnType<typeof buildProductLookupMaps>
+  lookup: ProductLookupMaps
 ) {
-  const brandAndNameMatch = lookup.productMap.get(makeProductKey(row.brand, row.name));
-  if (brandAndNameMatch) return brandAndNameMatch;
-
-  const normalizedBrand = normalizeLooseName(row.brand);
-  const normalizedNameKey = normalizeLooseName(row.name);
-  const normalizedBrandNameKey = `${normalizedBrand}__${normalizedNameKey}`;
-
-  const normalizedBrandNameMatch =
-    lookup.productNormalizedBrandNameMap.get(normalizedBrandNameKey);
-
-  if (normalizedBrandNameMatch) return normalizedBrandNameMatch;
-
-  const normalizedName = asString(row.name).toLowerCase();
-  if (normalizedName) {
-    const exactNameMatch = lookup.productNameOnlyMap.get(normalizedName);
-    if (exactNameMatch) return exactNameMatch;
-  }
-
-  const looseName = normalizeLooseName(row.name);
-  if (looseName) {
-    const looseNameMatch = lookup.productLooseNameMap.get(looseName);
-    if (looseNameMatch) return looseNameMatch;
-  }
-
-  const coreName = extractCoreProductName(row.name);
-  if (coreName) {
-    const coreNameMatch = lookup.productCoreNameMap.get(coreName);
-    if (coreNameMatch) return coreNameMatch;
-  }
-
-  if (looseName) {
-    for (const [candidateName, candidateId] of lookup.productContainsMap.entries()) {
-      if (
-        candidateName &&
-        (looseName.includes(candidateName) || candidateName.includes(looseName))
-      ) {
-        return candidateId;
-      }
-    }
-  }
-
-  const rowSku = asString(row.sku);
+  const rowSku = normalizeSku(row.sku);
   if (rowSku) {
     const skuMatch = lookup.productSkuMap.get(rowSku);
     if (skuMatch) return skuMatch;
+  }
+
+  const rowBarcode = normalizeBarcode(row.barcode);
+  if (rowBarcode) {
+    const barcodeMatch = lookup.productBarcodeMap.get(rowBarcode);
+    if (barcodeMatch) return barcodeMatch;
+  }
+
+  const exactKey = buildNormalizedProductKey(row.brand, row.name);
+  if (exactKey) {
+    const exactMatch = lookup.productMap.get(exactKey);
+    if (exactMatch) return exactMatch;
+  }
+
+  const looseKey = `${normalizeLooseProductName(row.brand)}__${normalizeLooseProductName(row.name)}`;
+  if (looseKey) {
+    const looseMatch = lookup.productLooseKeyMap.get(looseKey);
+    if (looseMatch) return looseMatch;
+  }
+
+  const fallbackName = normalizeLooseProductName(row.name);
+  if (fallbackName) {
+    for (const [candidateKey, candidateId] of lookup.productLooseKeyMap.entries()) {
+      const candidateName = candidateKey.split("__")[1] ?? "";
+      if (candidateName && (candidateName === fallbackName || candidateName.includes(fallbackName))) {
+        return candidateId;
+      }
+    }
   }
 
   return null;
@@ -204,12 +193,28 @@ export function buildInventoryUpserts(
   const lookup = buildProductLookupMaps(products);
   const inventoryMap = new Map<string, InventoryUpsertRow>();
   const unmatchedRows: UnmatchedInventoryRow[] = [];
+  const summary = {
+    totalRows: rows.length,
+    matchedRows: 0,
+    unmatchedRows: 0,
+    skippedRows: 0,
+    duplicateRowsSkipped: 0,
+  };
   const countedAt = new Date().toISOString();
 
   for (const row of rows) {
+    const sku = asString(row.sku);
+    const name = asString(row.name);
+
+    if (!sku && !name) {
+      summary.skippedRows += 1;
+      continue;
+    }
+
     const productId = matchProductId(row, lookup);
 
     if (!productId) {
+      summary.unmatchedRows += 1;
       const distributorResolution = resolveDistributorBrand(row.brand, row.vendor);
 
       unmatchedRows.push({
@@ -217,6 +222,18 @@ export function buildInventoryUpserts(
         name: asString(row.name),
         inventory: Number(row.inventory ?? 0),
         reorder_point: Number(row.reorder_point ?? 0),
+        sku: asString(row.sku) || null,
+        barcode: asString(row.barcode) || null,
+        category: asString(row.category) || null,
+        vendor: asString(row.vendor) || null,
+        price: Number.isFinite(Number(row.price)) ? Number(row.price) : null,
+        unit_cost: Number.isFinite(Number(row.unit_cost)) ? Number(row.unit_cost) : null,
+        retail_price: Number.isFinite(Number(row.retail_price)) ? Number(row.retail_price) : null,
+        size: asString(row.size) || null,
+        weight: asString(row.weight) || null,
+        pack: asString(row.pack) || null,
+        unit_size: asString(row.unit_size) || null,
+        package_size: asString(row.package_size) || null,
         suggested_distributor: distributorResolution?.review_required
           ? null
           : distributorResolution?.distributor ?? null,
@@ -226,6 +243,12 @@ export function buildInventoryUpserts(
         notes: distributorResolution?.notes ?? null,
       });
       continue;
+    }
+
+    summary.matchedRows += 1;
+
+    if (inventoryMap.has(productId)) {
+      summary.duplicateRowsSkipped += 1;
     }
 
     inventoryMap.set(productId, {
@@ -239,5 +262,6 @@ export function buildInventoryUpserts(
   return {
     inventoryRows: Array.from(inventoryMap.values()),
     unmatchedRows,
+    summary,
   };
 }

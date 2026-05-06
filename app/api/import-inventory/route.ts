@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { buildInventoryUpserts, createServiceRoleClient } from "@/lib/import/server";
 import type { ImportUploadRow } from "@/lib/import/shared";
+import { loadPublicTableColumns } from "@/lib/supabase/table-columns";
 
 export async function POST(request: Request) {
   try {
@@ -12,9 +13,20 @@ export async function POST(request: Request) {
     }
 
     const supabase = createServiceRoleClient();
+    const productColumns = await loadPublicTableColumns(supabase, "products");
+    const productSelectFields = [
+      "id",
+      "sku",
+      productColumns.has("barcode") ? "barcode" : null,
+      "brand_name",
+      "product_name",
+    ]
+      .filter(Boolean)
+      .join(", ");
+
     const { data: productsData, error: fetchError } = await supabase
       .from("products")
-      .select("id, sku, brand_name, product_name");
+      .select(productSelectFields);
 
     if (fetchError) {
       return NextResponse.json(
@@ -23,7 +35,16 @@ export async function POST(request: Request) {
       );
     }
 
-    const { inventoryRows, unmatchedRows } = buildInventoryUpserts(rows, productsData ?? []);
+    const { inventoryRows, unmatchedRows, summary } = buildInventoryUpserts(
+      rows,
+      (productsData ?? []) as unknown as Array<{
+        id: string;
+        sku: string | null;
+        barcode?: string | null;
+        brand_name: string | null;
+        product_name: string;
+      }>
+    );
 
     if (inventoryRows.length) {
       const { error: inventoryError } = await supabase.from("inventory").upsert(inventoryRows, {
@@ -40,11 +61,15 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({
-  ok: true,
-  count: inventoryRows.length,
-  unmatched_count: unmatchedRows.length,
-  unmatched_sample: unmatchedRows,
-});
+      ok: true,
+      count: inventoryRows.length,
+      total_rows: summary.totalRows,
+      matched_rows: summary.matchedRows,
+      unmatched_count: unmatchedRows.length,
+      skipped_rows: summary.skippedRows,
+      duplicate_rows_skipped: summary.duplicateRowsSkipped,
+      unmatched_sample: unmatchedRows,
+    });
   } catch (error) {
     return NextResponse.json(
       {

@@ -1,21 +1,108 @@
 import { NextResponse } from "next/server";
+import {
+  buildInventoryProductLookup,
+  matchInventoryProductId,
+  normalizeBarcode,
+  normalizeBrandName,
+  normalizeProductName,
+  normalizeSku,
+  type InventoryProductLookupRow,
+} from "@/app/lib/inventoryNormalization";
 import { createServiceRoleClient } from "@/lib/import/server";
 import {
   buildPriceAlertRecord,
-  buildPriceProductLookup,
   cleanImportedUnitCost,
   cleanPriceIdentity,
   cleanPriceSource,
-  matchPriceProductId,
   maybeNotifyPriceAlertTeam,
   shouldCreatePriceAlert,
-  type PriceProductLookupRow,
 } from "@/lib/pricing/price-tracking";
+import { loadPublicTableColumns } from "@/lib/supabase/table-columns";
+import { asString } from "@/lib/import/shared";
 
 type FullImportRow = Record<string, unknown>;
 
 function cleanText(value: unknown) {
-  return String(value ?? "").trim();
+  return asString(value);
+}
+
+function parseBoolean(value: unknown) {
+  return String(value ?? "true").toLowerCase() !== "false";
+}
+
+function buildMutableProductPayload(options: {
+  sku: string | null;
+  barcode: string | null;
+  brand_name: string;
+  product_name: string;
+  category: string | null;
+  distro: string | null;
+  current_price: number;
+  active: boolean;
+  row: FullImportRow;
+  productColumns: Set<string>;
+  includeIdentity: boolean;
+}) {
+  const payload: Record<string, unknown> = {
+    category: options.category,
+    distro: options.distro,
+    current_price: options.current_price,
+    active: options.active,
+  };
+
+  if (options.includeIdentity) {
+    payload.brand_name = options.brand_name;
+    payload.product_name = options.product_name;
+    if (options.sku) {
+      payload.sku = options.sku;
+    }
+    if (options.productColumns.has("barcode")) {
+      if (options.barcode) {
+        payload.barcode = options.barcode;
+      }
+    }
+  } else {
+    if (options.productColumns.has("sku") && options.sku) {
+      payload.sku = options.sku;
+    }
+
+    if (options.productColumns.has("barcode") && options.barcode) {
+      payload.barcode = options.barcode;
+    }
+  }
+
+  if (options.productColumns.has("unit_cost")) {
+    const unitCost = cleanImportedUnitCost({
+      unit_cost: options.row.unit_cost ?? options.row.current_price ?? options.row.price ?? options.row.cost,
+    });
+    if (unitCost != null) payload.unit_cost = unitCost;
+  }
+
+  if (options.productColumns.has("retail_price")) {
+    const retailPrice = cleanImportedUnitCost({
+      unit_cost:
+        options.row.retail_price ?? options.row.price ?? options.row.current_price ?? options.row.cost,
+    });
+    if (retailPrice != null) payload.retail_price = retailPrice;
+  }
+
+  const size = cleanText(options.row.size ?? options.row.unit_size);
+  const weight = cleanText(options.row.weight ?? options.row.calculated_weight);
+  const pack = cleanText(options.row.pack ?? options.row.package_size);
+  const notes = cleanText(options.row.notes ?? options.row.inventory_notes);
+  const reportingUnit = cleanText(options.row.reporting_unit_of_measure ?? options.row.reporting_unit);
+
+  if (options.productColumns.has("size") && size) payload.size = size;
+  if (options.productColumns.has("weight") && weight) payload.weight = weight;
+  if (options.productColumns.has("pack") && pack) payload.pack = pack;
+  if (options.productColumns.has("unit_size") && size) payload.unit_size = size;
+  if (options.productColumns.has("package_size") && pack) payload.package_size = pack;
+  if (options.productColumns.has("reporting_unit") && reportingUnit) {
+    payload.reporting_unit = reportingUnit;
+  }
+  if (options.productColumns.has("notes") && notes) payload.notes = notes;
+
+  return payload;
 }
 
 async function getPreviousUnitCost(
@@ -49,9 +136,21 @@ export async function POST(request: Request) {
     }
 
     const supabase = createServiceRoleClient();
+    const productColumns = await loadPublicTableColumns(supabase, "products");
+
+    const existingProductSelectFields = [
+      "id",
+      "sku",
+      productColumns.has("barcode") ? "barcode" : null,
+      "brand_name",
+      "product_name",
+    ]
+      .filter(Boolean)
+      .join(", ");
+
     const { data: existingProducts, error: existingProductsError } = await supabase
       .from("products")
-      .select("id, sku, brand_name, product_name, distro");
+      .select(existingProductSelectFields);
 
     if (existingProductsError) {
       return NextResponse.json(
@@ -60,11 +159,16 @@ export async function POST(request: Request) {
       );
     }
 
-    const priceLookup = buildPriceProductLookup(
-      (existingProducts ?? []) as PriceProductLookupRow[]
+    const lookup = buildInventoryProductLookup(
+      (existingProducts ?? []) as unknown as InventoryProductLookupRow[]
     );
 
-    let processed = 0;
+    const seenKeys = new Set<string>();
+    let totalRows = rows.length;
+    let matchedRows = 0;
+    let skippedRows = 0;
+    let duplicateRowsSkipped = 0;
+    let processedRows = 0;
     let priceSnapshotsCreated = 0;
     let priceAlertsCreated = 0;
     let priceAlertsSkipped = 0;
@@ -73,56 +177,119 @@ export async function POST(request: Request) {
       const brand_name = cleanText(row.brand_name ?? row.brand);
       const product_name = cleanText(row.product_name ?? row.name);
       const category = cleanText(row.category ?? row.category_group);
-      const distro = cleanText(row.distro ?? row.distributor ?? row.vendor);
-      const sku = cleanText(row.sku ?? row.product_sku ?? row.item_sku);
+      const distro = cleanText(row.distro ?? row.distributor ?? row.vendor) || null;
+      const sku = cleanText(row.sku ?? row.product_sku ?? row.item_sku ?? row.upc) || null;
+      const barcode = cleanText(row.barcode ?? row.upc ?? row.ean ?? row.gtin) || null;
       const unitCost = cleanImportedUnitCost({
         unit_cost: row.unit_cost ?? row.current_price ?? row.price ?? row.cost,
       });
       const current_price = unitCost ?? 0;
-      const active = String(row.is_active ?? row.active ?? "true").toLowerCase() !== "false";
+      const active = parseBoolean(row.is_active ?? row.active);
 
       if (!brand_name || !product_name) {
+        skippedRows += 1;
         continue;
       }
 
-      const identity = cleanPriceIdentity({
-        sku,
-        brand_name,
-        product_name,
-        distributor: distro,
-      });
-      const matchedProductId = matchPriceProductId(identity, priceLookup);
+      const rowKey = [
+        normalizeSku(sku),
+        normalizeBarcode(barcode),
+        normalizeBrandName(brand_name),
+        normalizeProductName(product_name),
+      ].join("__");
 
-      const { data: upsertedProduct, error: productError } = await supabase
-        .from("products")
-        .upsert(
-          {
-            sku: sku || null,
-            brand_name,
-            product_name,
-            category,
-            distro: distro || null,
-            current_price,
-            active,
-          },
-          {
-            onConflict: "brand_name,product_name",
-            ignoreDuplicates: false,
-          }
-        )
-        .select("id, sku, brand_name, product_name, distro")
-        .single();
-
-      if (productError) {
-        return NextResponse.json(
-          { error: `PRODUCT UPSERT ERROR: ${productError.message}` },
-          { status: 500 }
-        );
+      if (seenKeys.has(rowKey)) {
+        duplicateRowsSkipped += 1;
+        continue;
       }
 
-      const productId = matchedProductId ?? upsertedProduct.id;
+      seenKeys.add(rowKey);
+
+      const match = matchInventoryProductId(
+        {
+          sku,
+          barcode,
+          brand_name,
+          product_name,
+        },
+        lookup
+      );
+
+      let productId: string;
+
+      if (match) {
+        matchedRows += 1;
+
+        const updatePayload = buildMutableProductPayload({
+          sku,
+          barcode,
+          brand_name,
+          product_name,
+          category,
+          distro,
+          current_price,
+          active,
+          row,
+          productColumns,
+          includeIdentity: match.matchType === "brand_name" || match.matchType === "loose",
+        });
+
+        const { error: productError } = await supabase
+          .from("products")
+          .update(updatePayload)
+          .eq("id", match.productId);
+
+        if (productError) {
+          return NextResponse.json(
+            { error: `PRODUCT UPDATE ERROR: ${productError.message}` },
+            { status: 500 }
+          );
+        }
+
+        productId = match.productId;
+      } else {
+        matchedRows += 1;
+
+        const insertPayload = buildMutableProductPayload({
+          sku,
+          barcode,
+          brand_name,
+          product_name,
+          category,
+          distro,
+          current_price,
+          active,
+          row,
+          productColumns,
+          includeIdentity: true,
+        });
+
+        const { data: insertedProduct, error: insertError } = await supabase
+          .from("products")
+          .upsert(insertPayload, {
+            onConflict: "brand_name,product_name",
+            ignoreDuplicates: false,
+          })
+          .select("id")
+          .single();
+
+        if (insertError) {
+          return NextResponse.json(
+            { error: `PRODUCT UPSERT ERROR: ${insertError.message}` },
+            { status: 500 }
+          );
+        }
+
+        productId = insertedProduct.id;
+      }
 
       if (unitCost != null) {
+        const identity = cleanPriceIdentity({
+          sku,
+          brand_name,
+          product_name,
+          distributor: distro,
+        });
         const previousUnitCost = await getPreviousUnitCost(supabase, productId);
         const hasPriceChange = shouldCreatePriceAlert(previousUnitCost, unitCost);
         const priceChange =
@@ -243,12 +410,17 @@ export async function POST(request: Request) {
         }
       }
 
-      processed += 1;
+      processedRows += 1;
     }
 
     return NextResponse.json({
       ok: true,
-      count: processed,
+      count: processedRows,
+      total_rows: totalRows,
+      matched_rows: matchedRows,
+      unmatched_rows: 0,
+      skipped_rows: skippedRows,
+      duplicate_rows_skipped: duplicateRowsSkipped,
       price_snapshots_created: priceSnapshotsCreated,
       price_alerts_created: priceAlertsCreated,
       price_alerts_skipped: priceAlertsSkipped,

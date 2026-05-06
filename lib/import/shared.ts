@@ -1,20 +1,48 @@
+import {
+  normalizeBrandName,
+  normalizeLooseProductName,
+} from "@/app/lib/inventoryNormalization";
+
 export type ImportUploadRow = {
   sku: string;
+  barcode?: string | null;
   name: string;
   brand: string | null;
   vendor: string | null;
   category: string | null;
   price: number | null;
+  unit_cost?: number | null;
+  retail_price?: number | null;
   inventory: number;
   reorder_point: number;
   is_active: boolean;
+  size?: string | null;
+  weight?: string | null;
+  pack?: string | null;
+  unit_size?: string | null;
+  package_size?: string | null;
+  reporting_unit?: string | null;
+  notes?: string | null;
 };
 
 export type UnmatchedInventoryRow = {
+  sku?: string | null;
+  barcode?: string | null;
   brand: string | null;
   name: string;
+  category?: string | null;
+  vendor?: string | null;
+  price?: number | null;
+  unit_cost?: number | null;
+  retail_price?: number | null;
   inventory: number;
   reorder_point: number;
+  size?: string | null;
+  weight?: string | null;
+  pack?: string | null;
+  unit_size?: string | null;
+  package_size?: string | null;
+  reporting_unit?: string | null;
   suggested_distributor?: string | null;
   match_type?: "hard" | "soft" | null;
   confidence?: "high" | "medium" | "low" | null;
@@ -132,48 +160,11 @@ export function guessCategory(name: string) {
 }
 
 export function normalizeBrand(value: unknown) {
-  const raw = String(value ?? "").trim().toLowerCase();
-
-  const aliases: Record<string, string> = {
-    kiva: "kiva",
-    "kiva lost farm": "kiva",
-    "lost farm": "kiva",
-    rove: "rove",
-    "rove ice packs": "rove",
-    "raw garden": "raw garden",
-    raw: "raw garden",
-    stiiizy: "stiiizy",
-    "stiiizy promo": "stiiizy",
-    "uncle arnies": "uncle arnie's",
-    "uncle arnie's": "uncle arnie's",
-    "vet cbd": "vetcbd",
-    vetcbd: "vetcbd",
-    kingroll: "kingroll",
-    "kingroll juniors": "kingroll",
-    "kingroll junior": "kingroll",
-    "the pairist": "the pairist",
-    pairist: "the pairist",
-    autumn: "autumn brands",
-    "autumn brands": "autumn brands",
-  };
-
-  return aliases[raw] || raw;
+  return normalizeBrandName(value);
 }
 
 export function normalizeLooseName(value: unknown) {
-  return String(value ?? "")
-    .toLowerCase()
-    .replace(/\|/g, " ")
-    .replace(/\((h|i|s|ih|hs|sh)\)/gi, " ")
-    .replace(/\b\d+(\.\d+)?g\b/gi, " ")
-    .replace(/\b\d+\s*x\s*\d+\b/gi, " ")
-    .replace(
-      /\b(indoor|flower|preroll|pre-roll|pre roll|ratio|tablets?|tablet|cartridge|cart|vape|disposable|all in one|aio|live resin|liquid diamonds|distillate|infused|smalls|badder|budder|hash|rosin|gummies|gummy|drink|tea|beverage|chocolate|pack|pk)\b/gi,
-      " "
-    )
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeLooseProductName(value);
 }
 
 export function extractCoreProductName(value: unknown) {
