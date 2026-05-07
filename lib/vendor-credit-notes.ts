@@ -3,6 +3,7 @@ export type CreditTransactionForTotals = {
   vendor_name: string | null;
   credit_type: string | null;
   credit_amount: number | string | null;
+  status?: string | null;
 };
 
 export type VendorCreditTotals = {
@@ -32,6 +33,15 @@ export function vendorCreditKey(distributor: string, vendorName: string) {
   return `${distributor}__${vendorName}`;
 }
 
+function normalizeCreditStatus(value: string | null | undefined) {
+  const status = (value || "").trim().toLowerCase();
+
+  if (["used", "closed"].includes(status)) return "Used";
+  if (status.includes("used") || status.includes("closed")) return "Used";
+
+  return "Available";
+}
+
 export function summarizeCreditTransactions(
   transactions: CreditTransactionForTotals[]
 ): VendorCreditTotals {
@@ -39,16 +49,18 @@ export function summarizeCreditTransactions(
     (totals, transaction) => {
       const type = (transaction.credit_type || "").trim().toLowerCase();
       const amount = parseCreditAmount(transaction.credit_amount);
+      const isAvailable = normalizeCreditStatus(transaction.status) === "Available";
 
       if (type === "credit") {
         totals.totalCredits += amount;
+        if (isAvailable) totals.availableCredit += amount;
       }
 
       if (type === "return") {
         totals.totalReturns += amount;
+        if (isAvailable) totals.availableCredit += amount;
       }
 
-      totals.availableCredit = totals.totalCredits + totals.totalReturns;
       return totals;
     },
     { totalCredits: 0, totalReturns: 0, availableCredit: 0 }

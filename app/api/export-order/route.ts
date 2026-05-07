@@ -40,7 +40,7 @@ export async function GET(request: Request) {
 
   const { data: creditTransactions, error: creditError } = await supabase
     .from("credit_transactions")
-    .select("distributor, vendor_name, credit_type, credit_amount");
+    .select("distributor, vendor_name, credit_type, credit_amount, status");
 
   if (creditError) {
     return Response.json({ error: creditError.message }, { status: 500 });

@@ -1,7 +1,14 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, CreditCard, FileSpreadsheet, UploadCloud } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  CreditCard,
+  FileSpreadsheet,
+  Save,
+  UploadCloud,
+} from "lucide-react";
 import * as XLSX from "xlsx";
 import NavBar from "@/components/NavBar";
 import { Button } from "@/components/ui/button";
@@ -43,7 +50,19 @@ type CreditReturnForm = {
   credit_type: "Credit" | "Return";
   credit_amount: string;
   credit_date: string;
-  status: "Open" | "Used" | "Resolved";
+  status: CreditStatus;
+  notes: string;
+};
+
+type CreditStatus = "Available" | "Used";
+
+type CreditTransactionDraft = {
+  distributor: string;
+  vendor_name: string;
+  credit_type: "Credit" | "Return";
+  credit_amount: string;
+  credit_date: string;
+  status: CreditStatus;
   notes: string;
 };
 
@@ -65,19 +84,17 @@ type VendorCreditTotals = {
 };
 
 type CreditDashboardSummary = {
-  totalOpenCredit: number;
+  totalAvailableCredit: number;
   totalUsedCredit: number;
-  totalResolvedCredit: number;
-  openTransactions: number;
+  availableTransactions: number;
 };
 
-type StatusFilter = "all" | "open" | "used" | "resolved";
+type StatusFilter = "all" | "available" | "used";
 
 const statusFilters: { value: StatusFilter; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "open", label: "Open" },
+  { value: "available", label: "Available" },
   { value: "used", label: "Used" },
-  { value: "resolved", label: "Resolved" },
 ];
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
@@ -101,7 +118,7 @@ function getDefaultCreditReturnForm(): CreditReturnForm {
     credit_type: "Credit",
     credit_amount: "",
     credit_date: getTodayDateValue(),
-    status: "Open",
+    status: "Available",
     notes: "",
   };
 }
@@ -155,6 +172,34 @@ function normalizeType(value: string | null) {
   return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
+function normalizeCreditType(value: string | null): "Credit" | "Return" {
+  return normalizeType(value).toLowerCase().includes("return") ? "Return" : "Credit";
+}
+
+function normalizeCreditStatus(value: string | null): CreditStatus {
+  const status = (value || "").trim().toLowerCase();
+
+  if (["used", "closed"].includes(status)) return "Used";
+  if (status.includes("used") || status.includes("closed")) return "Used";
+
+  return "Available";
+}
+
+function getTransactionDraft(transaction: CreditTransaction): CreditTransactionDraft {
+  return {
+    distributor: transaction.distributor || "",
+    vendor_name: transaction.vendor_name || "",
+    credit_type: normalizeCreditType(transaction.credit_type),
+    credit_amount:
+      transaction.credit_amount === null || transaction.credit_amount === undefined
+        ? ""
+        : String(parseCreditAmount(transaction.credit_amount)),
+    credit_date: transaction.credit_date || "",
+    status: normalizeCreditStatus(transaction.status),
+    notes: transaction.notes || "",
+  };
+}
+
 function typeTone(value: string | null) {
   const type = (value || "").toLowerCase();
 
@@ -165,13 +210,13 @@ function typeTone(value: string | null) {
 }
 
 function statusTone(value: string | null) {
-  const status = (value || "").toLowerCase();
+  const status = normalizeCreditStatus(value);
 
-  if (status.includes("open") || status.includes("pending")) {
+  if (status === "Available") {
     return "border-blue-500/40 bg-blue-500/10 text-blue-300";
   }
 
-  if (status.includes("applied") || status.includes("paid") || status.includes("closed")) {
+  if (status === "Used") {
     return "border-green-500/40 bg-green-500/10 text-green-300";
   }
 
@@ -183,16 +228,17 @@ function summarizeVendorTransactions(transactions: CreditTransaction[]): VendorC
     (totals, transaction) => {
       const type = (transaction.credit_type || "").trim().toLowerCase();
       const amount = parseCreditAmount(transaction.credit_amount);
+      const isAvailable = normalizeCreditStatus(transaction.status) === "Available";
 
       if (type === "credit") {
         totals.totalCredits += amount;
+        if (isAvailable) totals.availableCredit += amount;
       }
 
       if (type === "return") {
         totals.totalReturns += amount;
+        if (isAvailable) totals.availableCredit += amount;
       }
-
-      totals.availableCredit = totals.totalCredits + totals.totalReturns;
       return totals;
     },
     { totalCredits: 0, totalReturns: 0, availableCredit: 0 }
@@ -233,29 +279,24 @@ function groupTransactions(transactions: CreditTransaction[]): DistributorGroup[
 function summarizeByStatus(transactions: CreditTransaction[]): CreditDashboardSummary {
   return transactions.reduce(
     (summary, transaction) => {
-      const status = (transaction.status || "").trim().toLowerCase();
+      const status = normalizeCreditStatus(transaction.status);
       const amount = summarizeVendorTransactions([transaction]).availableCredit;
 
-      if (status === "open") {
-        summary.totalOpenCredit += amount;
-        summary.openTransactions += 1;
+      if (status === "Available") {
+        summary.totalAvailableCredit += amount;
+        summary.availableTransactions += 1;
       }
 
-      if (status === "used") {
-        summary.totalUsedCredit += amount;
-      }
-
-      if (status === "resolved") {
-        summary.totalResolvedCredit += amount;
+      if (status === "Used") {
+        summary.totalUsedCredit += parseCreditAmount(transaction.credit_amount);
       }
 
       return summary;
     },
     {
-      totalOpenCredit: 0,
+      totalAvailableCredit: 0,
       totalUsedCredit: 0,
-      totalResolvedCredit: 0,
-      openTransactions: 0,
+      availableTransactions: 0,
     }
   );
 }
@@ -273,7 +314,10 @@ export default function CreditsReturnsManager() {
   const [isImporting, setIsImporting] = useState(false);
   const [message, setMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [updatingStatusIds, setUpdatingStatusIds] = useState<Record<string, boolean>>({});
+  const [transactionDrafts, setTransactionDrafts] = useState<Record<string, CreditTransactionDraft>>(
+    {}
+  );
+  const [savingTransactionIds, setSavingTransactionIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     loadTransactions();
@@ -293,7 +337,7 @@ export default function CreditsReturnsManager() {
     if (statusFilter === "all") return transactions;
 
     return transactions.filter(
-      (transaction) => (transaction.status || "").trim().toLowerCase() === statusFilter
+      (transaction) => normalizeCreditStatus(transaction.status).toLowerCase() === statusFilter
     );
   }, [statusFilter, transactions]);
 
@@ -382,7 +426,7 @@ export default function CreditsReturnsManager() {
             credit_type: asNullableString(row.credit_type || row.type || row.transaction_type),
             credit_amount: asNumber(row.credit_amount || row.amount || row.credit || row.value) ?? 0,
             credit_date: normalizeDate(row.credit_date || row.date || row.transaction_date),
-            status: asNullableString(row.status || row.credit_status),
+            status: normalizeCreditStatus(asNullableString(row.status || row.credit_status)),
             notes: asNullableString(row.notes || row.note || row.memo || row.description),
           };
         })
@@ -439,20 +483,49 @@ export default function CreditsReturnsManager() {
     setCollapsedVendors((current) => ({ ...current, [key]: !current[key] }));
   }
 
-  async function updateTransactionStatus(transactionId: string, status: "Used" | "Resolved" | "Open") {
-    setUpdatingStatusIds((current) => ({ ...current, [transactionId]: true }));
+  function updateTransactionDraft<Key extends keyof CreditTransactionDraft>(
+    transaction: CreditTransaction,
+    field: Key,
+    value: CreditTransactionDraft[Key]
+  ) {
+    setTransactionDrafts((current) => ({
+      ...current,
+      [transaction.id]: {
+        ...(current[transaction.id] ?? getTransactionDraft(transaction)),
+        [field]: value,
+      },
+    }));
+  }
+
+  async function saveTransaction(transaction: CreditTransaction) {
+    const draft = transactionDrafts[transaction.id] ?? getTransactionDraft(transaction);
+    const payload = {
+      distributor: draft.distributor.trim() || null,
+      vendor_name: draft.vendor_name.trim() || null,
+      credit_type: draft.credit_type,
+      credit_amount: parseCreditAmount(draft.credit_amount),
+      credit_date: draft.credit_date || null,
+      status: draft.status,
+      notes: draft.notes.trim() || null,
+    };
+
+    setSavingTransactionIds((current) => ({ ...current, [transaction.id]: true }));
     setMessage("");
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("credit_transactions")
-      .update({ status })
-      .eq("id", transactionId);
+      .update(payload)
+      .eq("id", transaction.id)
+      .select(
+        "id, distributor, vendor_name, credit_type, credit_amount, credit_date, status, notes, created_at"
+      )
+      .single();
 
-    if (error) {
-      setMessage(error.message);
-      setUpdatingStatusIds((current) => {
+    if (error || !data) {
+      setMessage(error?.message || "Credit / return update failed.");
+      setSavingTransactionIds((current) => {
         const next = { ...current };
-        delete next[transactionId];
+        delete next[transaction.id];
         return next;
       });
       return;
@@ -460,14 +533,20 @@ export default function CreditsReturnsManager() {
 
     setTransactions((current) =>
       current.map((transaction) =>
-        transaction.id === transactionId ? { ...transaction, status } : transaction
+        transaction.id === data.id ? (data as CreditTransaction) : transaction
       )
     );
-    setUpdatingStatusIds((current) => {
+    setTransactionDrafts((current) => {
       const next = { ...current };
-      delete next[transactionId];
+      delete next[transaction.id];
       return next;
     });
+    setSavingTransactionIds((current) => {
+      const next = { ...current };
+      delete next[transaction.id];
+      return next;
+    });
+    setMessage("Credit / return updated.");
   }
 
   return (
@@ -612,9 +691,8 @@ export default function CreditsReturnsManager() {
                 }
                 className="h-8 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-sm text-white outline-none focus:border-zinc-500"
               >
-                <option value="Open">Open</option>
+                <option value="Available">Available</option>
                 <option value="Used">Used</option>
-                <option value="Resolved">Resolved</option>
               </select>
             </label>
           </div>
@@ -633,10 +711,10 @@ export default function CreditsReturnsManager() {
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded border border-zinc-700 bg-zinc-800 p-3">
             <div className="text-xs font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-              Total Open Credit
+              Total Available Credit
             </div>
             <div className="mt-1 text-xl font-bold text-green-300">
-              {formatCurrency(dashboardSummary.totalOpenCredit)}
+              {formatCurrency(dashboardSummary.totalAvailableCredit)}
             </div>
           </div>
           <div className="rounded border border-zinc-700 bg-zinc-800 p-3">
@@ -649,18 +727,10 @@ export default function CreditsReturnsManager() {
           </div>
           <div className="rounded border border-zinc-700 bg-zinc-800 p-3">
             <div className="text-xs font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-              Total Resolved Credit
-            </div>
-            <div className="mt-1 text-xl font-bold text-white">
-              {formatCurrency(dashboardSummary.totalResolvedCredit)}
-            </div>
-          </div>
-          <div className="rounded border border-zinc-700 bg-zinc-800 p-3">
-            <div className="text-xs font-semibold tracking-[0.08em] text-zinc-400 uppercase">
-              Open Transactions
+              Available Transactions
             </div>
             <div className="mt-1 text-xl font-bold text-blue-300">
-              {dashboardSummary.openTransactions}
+              {dashboardSummary.availableTransactions}
             </div>
           </div>
         </div>
@@ -764,54 +834,148 @@ export default function CreditsReturnsManager() {
                                 </div>
                               </div>
                             </div>
-                            {vendor.transactions.map((transaction) => (
-                              <div
-                                key={transaction.id}
-                                className="grid gap-2 px-3 py-2 text-sm md:grid-cols-[92px_110px_110px_110px_minmax(0,1fr)_auto] md:items-center"
-                              >
-                                <div className="text-zinc-300">
-                                  {formatDate(transaction.credit_date)}
-                                </div>
-                                <div>
-                                  <span
-                                    className={`inline-flex rounded border px-2 py-0.5 text-xs font-semibold ${typeTone(
-                                      transaction.credit_type
-                                    )}`}
-                                  >
-                                    {normalizeType(transaction.credit_type)}
-                                  </span>
-                                </div>
-                                <div className="font-semibold text-white">
-                                  {formatCurrency(transaction.credit_amount)}
-                                </div>
-                                <div>
-                                  <span
-                                    className={`inline-flex rounded border px-2 py-0.5 text-xs ${statusTone(
-                                      transaction.status
-                                    )}`}
-                                  >
-                                    {transaction.status || "No status"}
-                                  </span>
-                                </div>
-                                <div className="min-w-0 whitespace-pre-wrap text-zinc-400">
-                                  {transaction.notes || "-"}
-                                </div>
-                                <div className="flex flex-wrap items-center gap-1 md:justify-end">
-                                  {(["Used", "Resolved", "Open"] as const).map((status) => (
+                            {vendor.transactions.map((transaction) => {
+                              const draft =
+                                transactionDrafts[transaction.id] ?? getTransactionDraft(transaction);
+                              const normalizedStatus = normalizeCreditStatus(draft.status);
+
+                              return (
+                                <div
+                                  key={transaction.id}
+                                  className="grid gap-2 px-3 py-3 text-sm xl:grid-cols-[minmax(120px,1fr)_minmax(120px,1fr)_104px_112px_120px_116px_minmax(160px,1.2fr)_auto] xl:items-end"
+                                >
+                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                    Distributor
+                                    <Input
+                                      value={draft.distributor}
+                                      onChange={(event) =>
+                                        updateTransactionDraft(
+                                          transaction,
+                                          "distributor",
+                                          event.target.value
+                                        )
+                                      }
+                                      className="border-zinc-700 bg-zinc-900 text-white"
+                                      placeholder="Distributor"
+                                    />
+                                  </label>
+                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                    Vendor
+                                    <Input
+                                      value={draft.vendor_name}
+                                      onChange={(event) =>
+                                        updateTransactionDraft(
+                                          transaction,
+                                          "vendor_name",
+                                          event.target.value
+                                        )
+                                      }
+                                      className="border-zinc-700 bg-zinc-900 text-white"
+                                      placeholder="Vendor / brand"
+                                    />
+                                  </label>
+                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                    Type
+                                    <select
+                                      value={draft.credit_type}
+                                      onChange={(event) =>
+                                        updateTransactionDraft(
+                                          transaction,
+                                          "credit_type",
+                                          event.target.value as CreditTransactionDraft["credit_type"]
+                                        )
+                                      }
+                                      className={`h-8 rounded-lg border bg-zinc-900 px-2.5 py-1 text-sm outline-none focus:border-zinc-500 ${typeTone(
+                                        draft.credit_type
+                                      )}`}
+                                    >
+                                      <option value="Credit">Credit</option>
+                                      <option value="Return">Return</option>
+                                    </select>
+                                  </label>
+                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                    Amount
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      value={draft.credit_amount}
+                                      onChange={(event) =>
+                                        updateTransactionDraft(
+                                          transaction,
+                                          "credit_amount",
+                                          event.target.value
+                                        )
+                                      }
+                                      className="border-zinc-700 bg-zinc-900 text-white"
+                                      placeholder="0.00"
+                                    />
+                                  </label>
+                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                    Date
+                                    <Input
+                                      type="date"
+                                      value={draft.credit_date}
+                                      onChange={(event) =>
+                                        updateTransactionDraft(
+                                          transaction,
+                                          "credit_date",
+                                          event.target.value
+                                        )
+                                      }
+                                      className="border-zinc-700 bg-zinc-900 text-white"
+                                      title={formatDate(transaction.credit_date)}
+                                    />
+                                  </label>
+                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                    Status
+                                    <select
+                                      value={normalizedStatus}
+                                      onChange={(event) =>
+                                        updateTransactionDraft(
+                                          transaction,
+                                          "status",
+                                          event.target.value as CreditStatus
+                                        )
+                                      }
+                                      className={`h-8 rounded-lg border bg-zinc-900 px-2.5 py-1 text-sm outline-none focus:border-zinc-500 ${statusTone(
+                                        normalizedStatus
+                                      )}`}
+                                    >
+                                      <option value="Available">Available</option>
+                                      <option value="Used">Used</option>
+                                    </select>
+                                  </label>
+                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                    Notes
+                                    <textarea
+                                      value={draft.notes}
+                                      onChange={(event) =>
+                                        updateTransactionDraft(
+                                          transaction,
+                                          "notes",
+                                          event.target.value
+                                        )
+                                      }
+                                      className="min-h-8 w-full resize-y rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm leading-snug text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
+                                      placeholder="Internal note"
+                                    />
+                                  </label>
+                                  <div className="flex items-end xl:justify-end">
                                     <Button
-                                      key={status}
                                       type="button"
                                       variant="outline"
-                                      className="h-7 border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-700"
-                                      onClick={() => updateTransactionStatus(transaction.id, status)}
-                                      disabled={updatingStatusIds[transaction.id]}
+                                      className="h-8 border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-700"
+                                      onClick={() => saveTransaction(transaction)}
+                                      disabled={savingTransactionIds[transaction.id]}
                                     >
-                                      {status === "Open" ? "Reopen" : `Mark ${status}`}
+                                      <Save className="size-3.5" />
+                                      {savingTransactionIds[transaction.id] ? "Saving..." : "Save"}
                                     </Button>
-                                  ))}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         ) : null}
                       </article>

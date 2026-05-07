@@ -63,7 +63,7 @@ export async function POST(request: Request) {
 
     const { data: creditTransactions, error: creditError } = await supabase
       .from("credit_transactions")
-      .select("distributor, vendor_name, credit_type, credit_amount");
+      .select("distributor, vendor_name, credit_type, credit_amount, status");
 
     if (creditError) {
       return NextResponse.json(

@@ -68,6 +68,7 @@ type CreditTransaction = {
   vendor_name: string | null;
   credit_type: string | null;
   credit_amount: number | string | null;
+  status: string | null;
 };
 
 type VendorCreditTotals = {
@@ -133,6 +134,15 @@ function toFiniteNumber(value: unknown, fallback = 0) {
 
 function formatCurrency(value: number | string | null) {
   return currencyFormatter.format(parseCreditAmount(value));
+}
+
+function normalizeCreditStatus(value: string | null) {
+  const status = (value || "").trim().toLowerCase();
+
+  if (["used", "closed"].includes(status)) return "Used";
+  if (status.includes("used") || status.includes("closed")) return "Used";
+
+  return "Available";
 }
 
 function formatVelocity(value: number | null | undefined) {
@@ -314,16 +324,18 @@ function summarizeVendorTransactions(transactions: CreditTransaction[]): VendorC
     (totals, transaction) => {
       const type = (transaction.credit_type || "").trim().toLowerCase();
       const amount = parseCreditAmount(transaction.credit_amount);
+      const isAvailable = normalizeCreditStatus(transaction.status) === "Available";
 
       if (type === "credit") {
         totals.totalCredits += amount;
+        if (isAvailable) totals.availableCredit += amount;
       }
 
       if (type === "return") {
         totals.totalReturns += amount;
+        if (isAvailable) totals.availableCredit += amount;
       }
 
-      totals.availableCredit = totals.totalCredits + totals.totalReturns;
       return totals;
     },
     { totalCredits: 0, totalReturns: 0, availableCredit: 0 }
@@ -463,7 +475,7 @@ export default function OrdersPage() {
         `),
         supabase
           .from("credit_transactions")
-          .select("id, distributor, vendor_name, credit_type, credit_amount")
+          .select("id, distributor, vendor_name, credit_type, credit_amount, status")
           .order("distributor", { ascending: true })
           .order("vendor_name", { ascending: true }),
         supabase

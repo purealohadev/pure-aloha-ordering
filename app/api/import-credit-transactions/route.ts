@@ -12,13 +12,22 @@ type CreditTransactionImportRow = {
   notes?: unknown;
 };
 
+function normalizeCreditStatus(value: string | null) {
+  const status = (value || "").trim().toLowerCase();
+
+  if (["used", "closed"].includes(status)) return "Used";
+  if (status.includes("used") || status.includes("closed")) return "Used";
+
+  return "Available";
+}
+
 function cleanCreditTransaction(row: CreditTransactionImportRow) {
   const distributor = asNullableString(row.distributor);
   const vendorName = asNullableString(row.vendor_name);
   const creditType = asNullableString(row.credit_type);
   const creditAmount = asNumber(row.credit_amount) ?? 0;
   const creditDate = asNullableString(row.credit_date);
-  const status = asNullableString(row.status);
+  const status = normalizeCreditStatus(asNullableString(row.status));
   const notes = asNullableString(row.notes);
 
   if (!distributor && !vendorName && !creditType && creditAmount === 0 && !creditDate) {
