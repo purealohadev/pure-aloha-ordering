@@ -10,6 +10,7 @@ type CreditTransactionImportRow = {
   credit_date?: unknown;
   status?: unknown;
   notes?: unknown;
+  group_name?: unknown;
 };
 
 function normalizeCreditStatus(value: string | null) {
@@ -29,6 +30,7 @@ function cleanCreditTransaction(row: CreditTransactionImportRow) {
   const creditDate = asNullableString(row.credit_date);
   const status = normalizeCreditStatus(asNullableString(row.status));
   const notes = asNullableString(row.notes);
+  const groupName = asNullableString(row.group_name);
 
   if (!distributor && !vendorName && !creditType && creditAmount === 0 && !creditDate) {
     return null;
@@ -42,6 +44,7 @@ function cleanCreditTransaction(row: CreditTransactionImportRow) {
     credit_date: creditDate,
     status,
     notes,
+    group_name: groupName,
   };
 }
 

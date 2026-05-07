@@ -6,8 +6,11 @@ import {
   ChevronRight,
   CreditCard,
   FileSpreadsheet,
+  Layers,
   Save,
+  Trash2,
   UploadCloud,
+  XCircle,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import NavBar from "@/components/NavBar";
@@ -31,6 +34,8 @@ type CreditTransaction = {
   credit_date: string | null;
   status: string | null;
   notes: string | null;
+  group_id: string | null;
+  group_name: string | null;
   created_at: string | null;
 };
 
@@ -42,6 +47,7 @@ type CreditTransactionImportRow = {
   credit_date: string | null;
   status: string | null;
   notes: string | null;
+  group_name: string | null;
 };
 
 type CreditReturnForm = {
@@ -83,6 +89,21 @@ type VendorCreditTotals = {
   availableCredit: number;
 };
 
+type CreditTransactionGroup = {
+  key: string;
+  groupId: string | null;
+  groupName: string;
+  transactions: CreditTransaction[];
+  totals: CreditGroupTotals;
+  status: CreditStatus;
+};
+
+type CreditGroupTotals = {
+  availableCredit: number;
+  usedCredit: number;
+  overallTotal: number;
+};
+
 type CreditDashboardSummary = {
   totalAvailableCredit: number;
   totalUsedCredit: number;
@@ -101,6 +122,26 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
 });
+
+const creditTransactionSelectFields =
+  "id, distributor, vendor_name, credit_type, credit_amount, credit_date, status, notes, group_id, group_name, created_at";
+
+const legacyCreditTransactionSelectFields =
+  "id, distributor, vendor_name, credit_type, credit_amount, credit_date, status, notes, created_at";
+
+function withDefaultGroupFields(transactions: CreditTransaction[]): CreditTransaction[] {
+  return transactions.map((transaction) => ({
+    ...transaction,
+    group_id: transaction.group_id ?? null,
+    group_name: transaction.group_name ?? null,
+  }));
+}
+
+function isMissingGroupColumnError(message: string | undefined) {
+  const normalized = (message || "").toLowerCase();
+
+  return normalized.includes("group_id") || normalized.includes("group_name");
+}
 
 function getTodayDateValue() {
   const now = new Date();
@@ -245,6 +286,68 @@ function summarizeVendorTransactions(transactions: CreditTransaction[]): VendorC
   );
 }
 
+function summarizeCreditGroup(transactions: CreditTransaction[]): CreditGroupTotals {
+  return transactions.reduce(
+    (totals, transaction) => {
+      const amount = parseCreditAmount(transaction.credit_amount);
+
+      totals.overallTotal += amount;
+
+      if (normalizeCreditStatus(transaction.status) === "Used") {
+        totals.usedCredit += amount;
+      } else {
+        totals.availableCredit += amount;
+      }
+
+      return totals;
+    },
+    { availableCredit: 0, usedCredit: 0, overallTotal: 0 }
+  );
+}
+
+function getCreditGroupStatus(transactions: CreditTransaction[]): CreditStatus {
+  return transactions.length > 0 &&
+    transactions.every((transaction) => normalizeCreditStatus(transaction.status) === "Used")
+    ? "Used"
+    : "Available";
+}
+
+function groupVendorTransactions(transactions: CreditTransaction[]): CreditTransactionGroup[] {
+  const groupMap = new Map<string, CreditTransaction[]>();
+
+  for (const transaction of transactions) {
+    const groupName = transaction.group_name?.trim();
+    const groupKey =
+      transaction.group_id || (groupName ? `name:${groupName.toLowerCase()}` : "ungrouped");
+
+    if (!groupMap.has(groupKey)) {
+      groupMap.set(groupKey, []);
+    }
+
+    groupMap.get(groupKey)?.push(transaction);
+  }
+
+  return Array.from(groupMap.entries())
+    .map(([key, groupTransactions]) => {
+      const firstTransaction = groupTransactions[0];
+      const groupName = firstTransaction?.group_name?.trim() || "Ungrouped Credits / Returns";
+
+      return {
+        key,
+        groupId: firstTransaction?.group_id || null,
+        groupName: key === "ungrouped" ? "Ungrouped Credits / Returns" : groupName,
+        transactions: groupTransactions,
+        totals: summarizeCreditGroup(groupTransactions),
+        status: getCreditGroupStatus(groupTransactions),
+      };
+    })
+    .sort((a, b) => {
+      if (a.key === "ungrouped") return -1;
+      if (b.key === "ungrouped") return 1;
+      return a.groupName.localeCompare(b.groupName);
+    });
+}
+
 function groupTransactions(transactions: CreditTransaction[]): DistributorGroup[] {
   const distributorMap = new Map<string, Map<string, CreditTransaction[]>>();
 
@@ -318,6 +421,12 @@ export default function CreditsReturnsManager() {
     {}
   );
   const [savingTransactionIds, setSavingTransactionIds] = useState<Record<string, boolean>>({});
+  const [selectedTransactionIds, setSelectedTransactionIds] = useState<Record<string, boolean>>({});
+  const [groupName, setGroupName] = useState("");
+  const [isGrouping, setIsGrouping] = useState(false);
+  const [isClearingGroup, setIsClearingGroup] = useState(false);
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
+  const [deletingTransactionIds, setDeletingTransactionIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     loadTransactions();
@@ -343,6 +452,10 @@ export default function CreditsReturnsManager() {
 
   const dashboardSummary = useMemo(() => summarizeByStatus(transactions), [transactions]);
   const groups = useMemo(() => groupTransactions(filteredTransactions), [filteredTransactions]);
+  const selectedIds = useMemo(
+    () => Object.entries(selectedTransactionIds).flatMap(([id, selected]) => (selected ? [id] : [])),
+    [selectedTransactionIds]
+  );
   const previewText = parsedRows.length ? `${parsedRows.length} parsed rows ready` : "No parsed rows";
 
   function updateFormField<Key extends keyof CreditReturnForm>(
@@ -366,14 +479,14 @@ export default function CreditsReturnsManager() {
       credit_date: form.credit_date || null,
       status: form.status,
       notes: form.notes.trim() || null,
+      group_id: null,
+      group_name: null,
     };
 
     const { data, error } = await supabase
       .from("credit_transactions")
       .insert(newTransaction)
-      .select(
-        "id, distributor, vendor_name, credit_type, credit_amount, credit_date, status, notes, created_at"
-      )
+      .select(creditTransactionSelectFields)
       .single();
 
     if (error) {
@@ -428,6 +541,7 @@ export default function CreditsReturnsManager() {
             credit_date: normalizeDate(row.credit_date || row.date || row.transaction_date),
             status: normalizeCreditStatus(asNullableString(row.status || row.credit_status)),
             notes: asNullableString(row.notes || row.note || row.memo || row.description),
+            group_name: asNullableString(row.group_name || row.group || row.batch || row.batch_name),
           };
         })
         .filter((row) => row.distributor || row.vendor_name || row.credit_amount || row.credit_date);
@@ -516,9 +630,7 @@ export default function CreditsReturnsManager() {
       .from("credit_transactions")
       .update(payload)
       .eq("id", transaction.id)
-      .select(
-        "id, distributor, vendor_name, credit_type, credit_amount, credit_date, status, notes, created_at"
-      )
+      .select(creditTransactionSelectFields)
       .single();
 
     if (error || !data) {
@@ -547,6 +659,161 @@ export default function CreditsReturnsManager() {
       return next;
     });
     setMessage("Credit / return updated.");
+  }
+
+  function toggleTransactionSelection(transactionId: string) {
+    setSelectedTransactionIds((current) => {
+      const next = { ...current };
+
+      if (next[transactionId]) {
+        delete next[transactionId];
+      } else {
+        next[transactionId] = true;
+      }
+
+      return next;
+    });
+  }
+
+  async function groupSelectedTransactions() {
+    const nextGroupName = groupName.trim();
+    if (!selectedIds.length || !nextGroupName) return;
+
+    const nextGroupId = crypto.randomUUID();
+    setIsGrouping(true);
+    setMessage("");
+
+    const { data, error } = await supabase
+      .from("credit_transactions")
+      .update({ group_id: nextGroupId, group_name: nextGroupName })
+      .in("id", selectedIds)
+      .select(creditTransactionSelectFields);
+
+    if (error) {
+      setMessage(error.message);
+      setIsGrouping(false);
+      return;
+    }
+
+    const updatedById = new Map(
+      ((data as CreditTransaction[] | null) ?? []).map((transaction) => [transaction.id, transaction])
+    );
+
+    setTransactions((current) =>
+      current.map((transaction) => updatedById.get(transaction.id) ?? transaction)
+    );
+    setSelectedTransactionIds({});
+    setGroupName("");
+    setMessage(`Grouped ${updatedById.size || selectedIds.length} credit / return entries.`);
+    setIsGrouping(false);
+  }
+
+  async function clearSelectedTransactionGroup() {
+    if (!selectedIds.length) return;
+
+    setIsClearingGroup(true);
+    setMessage("");
+
+    const { data, error } = await supabase
+      .from("credit_transactions")
+      .update({ group_id: null, group_name: null })
+      .in("id", selectedIds)
+      .select(creditTransactionSelectFields);
+
+    if (error) {
+      setMessage(error.message);
+      setIsClearingGroup(false);
+      return;
+    }
+
+    const updatedById = new Map(
+      ((data as CreditTransaction[] | null) ?? []).map((transaction) => [transaction.id, transaction])
+    );
+
+    setTransactions((current) =>
+      current.map((transaction) => updatedById.get(transaction.id) ?? transaction)
+    );
+    setSelectedTransactionIds({});
+    setMessage(`Cleared group from ${updatedById.size || selectedIds.length} entries.`);
+    setIsClearingGroup(false);
+  }
+
+  async function deleteTransactions(transactionIds: string[]) {
+    if (!transactionIds.length) return;
+
+    const { error } = await supabase.from("credit_transactions").delete().in("id", transactionIds);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const deletedIds = new Set(transactionIds);
+    setTransactions((current) => current.filter((transaction) => !deletedIds.has(transaction.id)));
+    setSelectedTransactionIds((current) => {
+      const next = { ...current };
+      for (const transactionId of transactionIds) {
+        delete next[transactionId];
+      }
+      return next;
+    });
+    setTransactionDrafts((current) => {
+      const next = { ...current };
+      for (const transactionId of transactionIds) {
+        delete next[transactionId];
+      }
+      return next;
+    });
+  }
+
+  async function deleteTransaction(transaction: CreditTransaction) {
+    const label = `${transaction.vendor_name || "Unknown Brand"} ${formatCurrency(
+      transaction.credit_amount
+    )}`;
+    if (!window.confirm(`Delete this credit / return entry?\n\n${label}`)) return;
+
+    setDeletingTransactionIds((current) => ({ ...current, [transaction.id]: true }));
+    setMessage("");
+
+    try {
+      await deleteTransactions([transaction.id]);
+      setMessage("Credit / return deleted.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Credit / return delete failed.");
+    } finally {
+      setDeletingTransactionIds((current) => {
+        const next = { ...current };
+        delete next[transaction.id];
+        return next;
+      });
+    }
+  }
+
+  async function deleteSelectedTransactions() {
+    if (!selectedIds.length) return;
+
+    if (
+      !window.confirm(
+        `Delete ${selectedIds.length} selected credit / return ${
+          selectedIds.length === 1 ? "entry" : "entries"
+        }?`
+      )
+    ) {
+      return;
+    }
+
+    setIsDeletingSelected(true);
+    setMessage("");
+
+    try {
+      await deleteTransactions(selectedIds);
+      setMessage(
+        `Deleted ${selectedIds.length} credit / return ${selectedIds.length === 1 ? "entry" : "entries"}.`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Selected delete failed.");
+    } finally {
+      setIsDeletingSelected(false);
+    }
   }
 
   return (
@@ -758,6 +1025,53 @@ export default function CreditsReturnsManager() {
           </div>
         </div>
 
+        {selectedIds.length ? (
+          <section className="flex flex-col gap-3 rounded border border-blue-500/40 bg-blue-500/10 p-3 sm:flex-row sm:items-end sm:justify-between">
+            <div className="grid gap-2 sm:flex-1 sm:grid-cols-[minmax(180px,320px)_auto_auto_auto] sm:items-end">
+              <label className="grid gap-1 text-xs font-semibold text-blue-200">
+                Group name
+                <Input
+                  value={groupName}
+                  onChange={(event) => setGroupName(event.target.value)}
+                  className="border-blue-500/40 bg-zinc-950 text-white placeholder:text-zinc-600"
+                  placeholder="Vendor Credit 5/7"
+                />
+              </label>
+              <Button
+                type="button"
+                onClick={groupSelectedTransactions}
+                disabled={!groupName.trim() || isGrouping || isClearingGroup}
+              >
+                <Layers className="size-4" />
+                {isGrouping ? "Grouping..." : "Group selected"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-700"
+                onClick={clearSelectedTransactionGroup}
+                disabled={isGrouping || isClearingGroup || isDeletingSelected}
+              >
+                <XCircle className="size-4" />
+                {isClearingGroup ? "Clearing..." : "Clear group"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-red-500/50 bg-red-500/10 text-red-200 hover:bg-red-500/20"
+                onClick={deleteSelectedTransactions}
+                disabled={isGrouping || isClearingGroup || isDeletingSelected}
+              >
+                <Trash2 className="size-4" />
+                {isDeletingSelected ? "Deleting..." : "Delete selected"}
+              </Button>
+            </div>
+            <div className="text-xs font-semibold tracking-[0.08em] text-blue-200 uppercase">
+              {selectedIds.length} selected
+            </div>
+          </section>
+        ) : null}
+
         {loading ? (
           <div className="rounded border border-zinc-700 bg-zinc-800 p-4 text-zinc-400">
             Loading credit transactions...
@@ -834,148 +1148,232 @@ export default function CreditsReturnsManager() {
                                 </div>
                               </div>
                             </div>
-                            {vendor.transactions.map((transaction) => {
-                              const draft =
-                                transactionDrafts[transaction.id] ?? getTransactionDraft(transaction);
-                              const normalizedStatus = normalizeCreditStatus(draft.status);
+                            {groupVendorTransactions(vendor.transactions).some(
+                              (creditGroup) => creditGroup.key !== "ungrouped"
+                            ) ? (
+                              <div className="flex flex-wrap gap-2 bg-zinc-900 px-3 pb-3">
+                                {groupVendorTransactions(vendor.transactions)
+                                  .filter((creditGroup) => creditGroup.key !== "ungrouped")
+                                  .map((creditGroup) => (
+                                    <div
+                                      key={creditGroup.key}
+                                      className="rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-zinc-300"
+                                    >
+                                      <div className="mb-1 flex flex-wrap items-center gap-2">
+                                        <span className="font-semibold text-white">
+                                          {creditGroup.groupName}
+                                        </span>
+                                        <span
+                                          className={`inline-flex rounded border px-2 py-0.5 font-semibold ${statusTone(
+                                            creditGroup.status
+                                          )}`}
+                                        >
+                                          {creditGroup.status}
+                                        </span>
+                                        <span>{creditGroup.transactions.length} entries</span>
+                                      </div>
+                                      <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                        <span>
+                                          Available:{" "}
+                                          <strong className="text-green-300">
+                                            {formatCurrency(creditGroup.totals.availableCredit)}
+                                          </strong>
+                                        </span>
+                                        <span>
+                                          Used:{" "}
+                                          <strong className="text-white">
+                                            {formatCurrency(creditGroup.totals.usedCredit)}
+                                          </strong>
+                                        </span>
+                                        <span>
+                                          Total:{" "}
+                                          <strong className="text-white">
+                                            {formatCurrency(creditGroup.totals.overallTotal)}
+                                          </strong>
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                              </div>
+                            ) : null}
 
-                              return (
-                                <div
-                                  key={transaction.id}
-                                  className="grid gap-2 px-3 py-3 text-sm xl:grid-cols-[minmax(120px,1fr)_minmax(120px,1fr)_104px_112px_120px_116px_minmax(160px,1.2fr)_auto] xl:items-end"
-                                >
-                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
-                                    Distributor
-                                    <Input
-                                      value={draft.distributor}
-                                      onChange={(event) =>
-                                        updateTransactionDraft(
-                                          transaction,
-                                          "distributor",
-                                          event.target.value
-                                        )
-                                      }
-                                      className="border-zinc-700 bg-zinc-900 text-white"
-                                      placeholder="Distributor"
-                                    />
-                                  </label>
-                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
-                                    Vendor
-                                    <Input
-                                      value={draft.vendor_name}
-                                      onChange={(event) =>
-                                        updateTransactionDraft(
-                                          transaction,
-                                          "vendor_name",
-                                          event.target.value
-                                        )
-                                      }
-                                      className="border-zinc-700 bg-zinc-900 text-white"
-                                      placeholder="Vendor / brand"
-                                    />
-                                  </label>
-                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
-                                    Type
-                                    <select
-                                      value={draft.credit_type}
-                                      onChange={(event) =>
-                                        updateTransactionDraft(
-                                          transaction,
-                                          "credit_type",
-                                          event.target.value as CreditTransactionDraft["credit_type"]
-                                        )
-                                      }
-                                      className={`h-8 rounded-lg border bg-zinc-900 px-2.5 py-1 text-sm outline-none focus:border-zinc-500 ${typeTone(
-                                        draft.credit_type
-                                      )}`}
-                                    >
-                                      <option value="Credit">Credit</option>
-                                      <option value="Return">Return</option>
-                                    </select>
-                                  </label>
-                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
-                                    Amount
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      step="0.01"
-                                      value={draft.credit_amount}
-                                      onChange={(event) =>
-                                        updateTransactionDraft(
-                                          transaction,
-                                          "credit_amount",
-                                          event.target.value
-                                        )
-                                      }
-                                      className="border-zinc-700 bg-zinc-900 text-white"
-                                      placeholder="0.00"
-                                    />
-                                  </label>
-                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
-                                    Date
-                                    <Input
-                                      type="date"
-                                      value={draft.credit_date}
-                                      onChange={(event) =>
-                                        updateTransactionDraft(
-                                          transaction,
-                                          "credit_date",
-                                          event.target.value
-                                        )
-                                      }
-                                      className="border-zinc-700 bg-zinc-900 text-white"
-                                      title={formatDate(transaction.credit_date)}
-                                    />
-                                  </label>
-                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
-                                    Status
-                                    <select
-                                      value={normalizedStatus}
-                                      onChange={(event) =>
-                                        updateTransactionDraft(
-                                          transaction,
-                                          "status",
-                                          event.target.value as CreditStatus
-                                        )
-                                      }
-                                      className={`h-8 rounded-lg border bg-zinc-900 px-2.5 py-1 text-sm outline-none focus:border-zinc-500 ${statusTone(
-                                        normalizedStatus
-                                      )}`}
-                                    >
-                                      <option value="Available">Available</option>
-                                      <option value="Used">Used</option>
-                                    </select>
-                                  </label>
-                                  <label className="grid gap-1 text-xs font-semibold text-zinc-400">
-                                    Notes
-                                    <textarea
-                                      value={draft.notes}
-                                      onChange={(event) =>
-                                        updateTransactionDraft(
-                                          transaction,
-                                          "notes",
-                                          event.target.value
-                                        )
-                                      }
-                                      className="min-h-8 w-full resize-y rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm leading-snug text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
-                                      placeholder="Internal note"
-                                    />
-                                  </label>
-                                  <div className="flex items-end xl:justify-end">
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      className="h-8 border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-700"
-                                      onClick={() => saveTransaction(transaction)}
-                                      disabled={savingTransactionIds[transaction.id]}
-                                    >
-                                      <Save className="size-3.5" />
-                                      {savingTransactionIds[transaction.id] ? "Saving..." : "Save"}
-                                    </Button>
+                            <div className="divide-y divide-zinc-700">
+                              {vendor.transactions.map((transaction) => {
+                                const draft =
+                                  transactionDrafts[transaction.id] ??
+                                  getTransactionDraft(transaction);
+                                const normalizedStatus = normalizeCreditStatus(draft.status);
+
+                                return (
+                                  <div
+                                    key={transaction.id}
+                                    className="grid gap-2 px-3 py-3 text-sm xl:grid-cols-[28px_minmax(120px,1fr)_minmax(120px,1fr)_104px_112px_120px_116px_minmax(160px,1.2fr)_auto] xl:items-end"
+                                  >
+                                    <label className="flex h-8 items-center xl:mb-0.5">
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(selectedTransactionIds[transaction.id])}
+                                        onChange={() => toggleTransactionSelection(transaction.id)}
+                                        className="size-4 rounded border-zinc-600 bg-zinc-900 accent-blue-500"
+                                        aria-label="Select credit / return entry"
+                                      />
+                                    </label>
+                                    <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                      Distro
+                                      <Input
+                                        value={draft.distributor}
+                                        onChange={(event) =>
+                                          updateTransactionDraft(
+                                            transaction,
+                                            "distributor",
+                                            event.target.value
+                                          )
+                                        }
+                                        className="border-zinc-700 bg-zinc-900 text-white"
+                                        placeholder="Distributor"
+                                      />
+                                    </label>
+                                    <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                      Brand
+                                      <Input
+                                        value={draft.vendor_name}
+                                        onChange={(event) =>
+                                          updateTransactionDraft(
+                                            transaction,
+                                            "vendor_name",
+                                            event.target.value
+                                          )
+                                        }
+                                        className="border-zinc-700 bg-zinc-900 text-white"
+                                        placeholder="Brand"
+                                      />
+                                    </label>
+                                    <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                      Credit / Return
+                                      <select
+                                        value={draft.credit_type}
+                                        onChange={(event) =>
+                                          updateTransactionDraft(
+                                            transaction,
+                                            "credit_type",
+                                            event.target.value as CreditTransactionDraft["credit_type"]
+                                          )
+                                        }
+                                        className={`h-8 rounded-lg border bg-zinc-900 px-2.5 py-1 text-sm outline-none focus:border-zinc-500 ${typeTone(
+                                          draft.credit_type
+                                        )}`}
+                                      >
+                                        <option value="Credit">Credit</option>
+                                        <option value="Return">Return</option>
+                                      </select>
+                                    </label>
+                                    <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                      Amount
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        value={draft.credit_amount}
+                                        onChange={(event) =>
+                                          updateTransactionDraft(
+                                            transaction,
+                                            "credit_amount",
+                                            event.target.value
+                                          )
+                                        }
+                                        className="border-zinc-700 bg-zinc-900 text-white"
+                                        placeholder="0.00"
+                                      />
+                                    </label>
+                                    <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                      Date
+                                      <Input
+                                        type="date"
+                                        value={draft.credit_date}
+                                        onChange={(event) =>
+                                          updateTransactionDraft(
+                                            transaction,
+                                            "credit_date",
+                                            event.target.value
+                                          )
+                                        }
+                                        className="border-zinc-700 bg-zinc-900 text-white"
+                                        title={formatDate(transaction.credit_date)}
+                                      />
+                                    </label>
+                                    <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                      Status
+                                      <select
+                                        value={normalizedStatus}
+                                        onChange={(event) =>
+                                          updateTransactionDraft(
+                                            transaction,
+                                            "status",
+                                            event.target.value as CreditStatus
+                                          )
+                                        }
+                                        className={`h-8 rounded-lg border bg-zinc-900 px-2.5 py-1 text-sm outline-none focus:border-zinc-500 ${statusTone(
+                                          normalizedStatus
+                                        )}`}
+                                      >
+                                        <option value="Available">Available</option>
+                                        <option value="Used">Used</option>
+                                      </select>
+                                    </label>
+                                    <label className="grid gap-1 text-xs font-semibold text-zinc-400">
+                                      Notes
+                                      <textarea
+                                        value={draft.notes}
+                                        onChange={(event) =>
+                                          updateTransactionDraft(
+                                            transaction,
+                                            "notes",
+                                            event.target.value
+                                          )
+                                        }
+                                        className="min-h-8 w-full resize-y rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm leading-snug text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
+                                        placeholder="Internal note"
+                                      />
+                                      {transaction.group_name ? (
+                                        <span className="w-fit rounded border border-zinc-700 bg-zinc-950 px-2 py-0.5 text-xs text-blue-300">
+                                          {transaction.group_name}
+                                        </span>
+                                      ) : null}
+                                    </label>
+                                    <div className="flex flex-wrap items-end gap-1 xl:justify-end">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="h-8 border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-700"
+                                        onClick={() => saveTransaction(transaction)}
+                                        disabled={
+                                          savingTransactionIds[transaction.id] ||
+                                          deletingTransactionIds[transaction.id]
+                                        }
+                                      >
+                                        <Save className="size-3.5" />
+                                        {savingTransactionIds[transaction.id] ? "Saving..." : "Save"}
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="h-8 border-red-500/50 bg-red-500/10 px-2 text-xs text-red-200 hover:bg-red-500/20"
+                                        onClick={() => deleteTransaction(transaction)}
+                                        disabled={
+                                          savingTransactionIds[transaction.id] ||
+                                          deletingTransactionIds[transaction.id]
+                                        }
+                                      >
+                                        <Trash2 className="size-3.5" />
+                                        {deletingTransactionIds[transaction.id]
+                                          ? "Deleting..."
+                                          : "Delete"}
+                                      </Button>
+                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })}
+                                );
+                              })}
+                            </div>
                           </div>
                         ) : null}
                       </article>
@@ -996,15 +1394,37 @@ async function fetchTransactions() {
 
   const { data, error } = await supabase
     .from("credit_transactions")
-    .select(
-      "id, distributor, vendor_name, credit_type, credit_amount, credit_date, status, notes, created_at"
-    )
+    .select(creditTransactionSelectFields)
     .order("distributor", { ascending: true })
     .order("vendor_name", { ascending: true })
     .order("credit_date", { ascending: false });
 
+  if (error && isMissingGroupColumnError(error.message)) {
+    const legacyResult = await supabase
+      .from("credit_transactions")
+      .select(legacyCreditTransactionSelectFields)
+      .order("distributor", { ascending: true })
+      .order("vendor_name", { ascending: true })
+      .order("credit_date", { ascending: false });
+
+    return {
+      transactions: withDefaultGroupFields(
+        ((legacyResult.data as Omit<CreditTransaction, "group_id" | "group_name">[] | null) ?? []).map(
+          (transaction) => ({
+            ...transaction,
+            group_id: null,
+            group_name: null,
+          })
+        )
+      ),
+      error: legacyResult.error?.message
+        ? legacyResult.error.message
+        : "Grouping columns are not available yet. Existing records are shown ungrouped.",
+    };
+  }
+
   return {
-    transactions: (data as CreditTransaction[] | null) ?? [],
+    transactions: withDefaultGroupFields((data as CreditTransaction[] | null) ?? []),
     error: error?.message,
   };
 }
