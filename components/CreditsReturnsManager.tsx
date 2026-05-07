@@ -143,6 +143,24 @@ function isMissingGroupColumnError(message: string | undefined) {
   return normalized.includes("group_id") || normalized.includes("group_name");
 }
 
+function normalizeMatchKey(value: string | null | undefined) {
+  return (value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/[™®©]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function preferDisplayName(current: string | undefined, candidate: string) {
+  if (!current) return candidate;
+  if (current === current.toUpperCase() && candidate !== candidate.toUpperCase()) return candidate;
+  return current;
+}
+
 function getTodayDateValue() {
   const now = new Date();
   const year = now.getFullYear();
@@ -349,32 +367,43 @@ function groupVendorTransactions(transactions: CreditTransaction[]): CreditTrans
 }
 
 function groupTransactions(transactions: CreditTransaction[]): DistributorGroup[] {
-  const distributorMap = new Map<string, Map<string, CreditTransaction[]>>();
+  const distributorMap = new Map<
+    string,
+    { displayName: string; vendors: Map<string, { displayName: string; transactions: CreditTransaction[] }> }
+  >();
 
   for (const transaction of transactions) {
     const distributor = transaction.distributor || "Unknown Distributor";
     const vendorName = transaction.vendor_name || "Unknown Vendor";
+    const distributorKey = normalizeMatchKey(distributor);
+    const vendorKey = normalizeMatchKey(vendorName);
 
-    if (!distributorMap.has(distributor)) {
-      distributorMap.set(distributor, new Map());
+    if (!distributorMap.has(distributorKey)) {
+      distributorMap.set(distributorKey, { displayName: distributor, vendors: new Map() });
     }
 
-    const vendorMap = distributorMap.get(distributor);
-    if (!vendorMap) continue;
+    const distributorGroup = distributorMap.get(distributorKey);
+    if (!distributorGroup) continue;
 
-    if (!vendorMap.has(vendorName)) {
-      vendorMap.set(vendorName, []);
+    distributorGroup.displayName = preferDisplayName(distributorGroup.displayName, distributor);
+
+    if (!distributorGroup.vendors.has(vendorKey)) {
+      distributorGroup.vendors.set(vendorKey, { displayName: vendorName, transactions: [] });
     }
 
-    vendorMap.get(vendorName)?.push(transaction);
+    const vendorGroup = distributorGroup.vendors.get(vendorKey);
+    if (!vendorGroup) continue;
+
+    vendorGroup.displayName = preferDisplayName(vendorGroup.displayName, vendorName);
+    vendorGroup.transactions.push(transaction);
   }
 
-  return Array.from(distributorMap.entries()).map(([distributor, vendorMap]) => ({
-    distributor,
-    vendors: Array.from(vendorMap.entries()).map(([vendorName, vendorTransactions]) => ({
-      vendorName,
-      transactions: vendorTransactions,
-      totals: summarizeVendorTransactions(vendorTransactions),
+  return Array.from(distributorMap.values()).map((distributorGroup) => ({
+    distributor: distributorGroup.displayName,
+    vendors: Array.from(distributorGroup.vendors.values()).map((vendorGroup) => ({
+      vendorName: vendorGroup.displayName,
+      transactions: vendorGroup.transactions,
+      totals: summarizeVendorTransactions(vendorGroup.transactions),
     })),
   }));
 }

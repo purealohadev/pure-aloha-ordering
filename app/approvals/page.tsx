@@ -334,27 +334,47 @@ function buildOrderCard(order: PurchaseOrderRow, lines: PurchaseOrderLineRow[]):
     0
   );
 
-  const distributorMap = new Map<string, Map<string, PurchaseOrderLineRow[]>>();
+  const distributorMap = new Map<
+    string,
+    {
+      displayName: string;
+      brands: Map<string, { displayName: string; items: PurchaseOrderLineRow[] }>;
+    }
+  >();
 
   for (const line of lines) {
     const product = getLineProduct(line.products);
     const distributor = getLineDistributor(product?.brand_name ?? null, product?.distro ?? null);
     const brandName = product?.brand_name?.trim() || "Unknown Brand";
+    const distributorKey = normalizeMatchKey(distributor);
+    const brandKey = normalizeMatchKey(brandName);
 
-    const brandMap = distributorMap.get(distributor) ?? new Map<string, PurchaseOrderLineRow[]>();
-    const brandItems = brandMap.get(brandName) ?? [];
+    if (!distributorMap.has(distributorKey)) {
+      distributorMap.set(distributorKey, { displayName: distributor, brands: new Map() });
+    }
 
-    brandItems.push(line);
-    brandMap.set(brandName, brandItems);
-    distributorMap.set(distributor, brandMap);
+    const distributorGroup = distributorMap.get(distributorKey);
+    if (!distributorGroup) continue;
+
+    distributorGroup.displayName = preferDisplayName(distributorGroup.displayName, distributor);
+
+    if (!distributorGroup.brands.has(brandKey)) {
+      distributorGroup.brands.set(brandKey, { displayName: brandName, items: [] });
+    }
+
+    const brandGroup = distributorGroup.brands.get(brandKey);
+    if (!brandGroup) continue;
+
+    brandGroup.displayName = preferDisplayName(brandGroup.displayName, brandName);
+    brandGroup.items.push(line);
   }
 
-  const distributorGroups = Array.from(distributorMap.entries())
-    .map(([name, brandMap]) => {
-      const brands = Array.from(brandMap.entries())
-        .map(([brandName, items]) => ({
-          name: brandName,
-          items: items.sort((a, b) =>
+  const distributorGroups = Array.from(distributorMap.values())
+    .map((distributorGroup) => {
+      const brands = Array.from(distributorGroup.brands.values())
+        .map((brandGroup) => ({
+          name: brandGroup.displayName,
+          items: brandGroup.items.sort((a, b) =>
             (getLineProduct(a.products)?.product_name ?? "").localeCompare(
               getLineProduct(b.products)?.product_name ?? ""
             )
@@ -373,7 +393,7 @@ function buildOrderCard(order: PurchaseOrderRow, lines: PurchaseOrderLineRow[]):
       );
 
       return {
-        name,
+        name: distributorGroup.displayName,
         itemsCount: brands.reduce((sum, brand) => sum + brand.items.length, 0),
         totalUnits: distributorUnits,
         estimatedTotalCost: distributorCost,
@@ -417,6 +437,24 @@ function getLineProduct(products: PurchaseOrderLineProduct | PurchaseOrderLinePr
   }
 
   return products;
+}
+
+function normalizeMatchKey(value: string | null | undefined) {
+  return (value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/[™®©]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function preferDisplayName(current: string | undefined, candidate: string) {
+  if (!current) return candidate;
+  if (current === current.toUpperCase() && candidate !== candidate.toUpperCase()) return candidate;
+  return current;
 }
 
 function toNumber(value: number | string | null | undefined) {

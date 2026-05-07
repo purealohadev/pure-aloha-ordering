@@ -30,7 +30,25 @@ export function formatCreditCurrency(value: number | string | null) {
 }
 
 export function vendorCreditKey(distributor: string, vendorName: string) {
-  return `${distributor}__${vendorName}`;
+  return `${normalizeMatchKey(distributor)}__${normalizeMatchKey(vendorName)}`;
+}
+
+function normalizeMatchKey(value: string | null | undefined) {
+  return (value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/[™®©]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function preferDisplayName(current: string | undefined, candidate: string) {
+  if (!current) return candidate;
+  if (current === current.toUpperCase() && candidate !== candidate.toUpperCase()) return candidate;
+  return current;
 }
 
 function normalizeCreditStatus(value: string | null | undefined) {
@@ -68,31 +86,48 @@ export function summarizeCreditTransactions(
 }
 
 export function groupCreditTotals(transactions: CreditTransactionForTotals[]) {
-  const distributorMap = new Map<string, Map<string, CreditTransactionForTotals[]>>();
+  const distributorMap = new Map<
+    string,
+    {
+      displayName: string;
+      vendors: Map<string, { displayName: string; transactions: CreditTransactionForTotals[] }>;
+    }
+  >();
 
   for (const transaction of transactions) {
     const distributor = transaction.distributor || "Unknown Distributor";
     const vendorName = transaction.vendor_name || "Unknown Vendor";
+    const distributorKey = normalizeMatchKey(distributor);
+    const vendorKey = normalizeMatchKey(vendorName);
 
-    if (!distributorMap.has(distributor)) {
-      distributorMap.set(distributor, new Map());
+    if (!distributorMap.has(distributorKey)) {
+      distributorMap.set(distributorKey, { displayName: distributor, vendors: new Map() });
     }
 
-    const vendorMap = distributorMap.get(distributor);
-    if (!vendorMap) continue;
+    const distributorGroup = distributorMap.get(distributorKey);
+    if (!distributorGroup) continue;
 
-    if (!vendorMap.has(vendorName)) {
-      vendorMap.set(vendorName, []);
+    distributorGroup.displayName = preferDisplayName(distributorGroup.displayName, distributor);
+
+    if (!distributorGroup.vendors.has(vendorKey)) {
+      distributorGroup.vendors.set(vendorKey, { displayName: vendorName, transactions: [] });
     }
 
-    vendorMap.get(vendorName)?.push(transaction);
+    const vendorGroup = distributorGroup.vendors.get(vendorKey);
+    if (!vendorGroup) continue;
+
+    vendorGroup.displayName = preferDisplayName(vendorGroup.displayName, vendorName);
+    vendorGroup.transactions.push(transaction);
   }
 
   const totals = new Map<string, VendorCreditTotals>();
 
-  for (const [distributor, vendorMap] of distributorMap.entries()) {
-    for (const [vendorName, vendorTransactions] of vendorMap.entries()) {
-      totals.set(vendorCreditKey(distributor, vendorName), summarizeCreditTransactions(vendorTransactions));
+  for (const distributorGroup of distributorMap.values()) {
+    for (const vendorGroup of distributorGroup.vendors.values()) {
+      totals.set(
+        vendorCreditKey(distributorGroup.displayName, vendorGroup.displayName),
+        summarizeCreditTransactions(vendorGroup.transactions)
+      );
     }
   }
 

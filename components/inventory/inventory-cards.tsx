@@ -139,8 +139,23 @@ function displayGroupName(value: string | null | undefined, fallback: string) {
 }
 
 function getNormalizedBrandName(value: string | null | undefined) {
-  const trimmed = value?.trim()
-  return trimmed ? trimmed.toLowerCase() : null
+  const normalized = (value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/[™®©]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+
+  return normalized || null
+}
+
+function preferDisplayName(current: string | undefined, candidate: string) {
+  if (!current) return candidate
+  if (current === current.toUpperCase() && candidate !== candidate.toUpperCase()) return candidate
+  return current
 }
 
 function getSummaryDistributorName(distributorName: string) {
@@ -367,30 +382,48 @@ function groupItemsByDistributorAndBrand(
   items: InventoryItem[],
   acceptedBrandDistributors: AcceptedBrandDistributorMap
 ): DistributorGroup[] {
-  const distributorMap = new Map<string, Map<string, InventoryItem[]>>()
+  const distributorMap = new Map<
+    string,
+    { displayName: string; brands: Map<string, { displayName: string; items: InventoryItem[] }> }
+  >()
 
   for (const item of items) {
     const distributorName = getEffectiveDistributorName(item, acceptedBrandDistributors)
     const brandName = displayGroupName(item.brand, UNKNOWN_BRAND)
-    const brandMap = distributorMap.get(distributorName) ?? new Map<string, InventoryItem[]>()
-    const brandItems = brandMap.get(brandName) ?? []
+    const distributorKey = distributorName.trim().toLowerCase().replace(/\s+/g, " ")
+    const brandKey = getNormalizedBrandName(brandName) ?? UNKNOWN_BRAND.toLowerCase()
 
-    brandItems.push(item)
-    brandMap.set(brandName, brandItems)
-    distributorMap.set(distributorName, brandMap)
+    if (!distributorMap.has(distributorKey)) {
+      distributorMap.set(distributorKey, { displayName: distributorName, brands: new Map() })
+    }
+
+    const distributorGroup = distributorMap.get(distributorKey)
+    if (!distributorGroup) continue
+
+    distributorGroup.displayName = preferDisplayName(distributorGroup.displayName, distributorName)
+
+    if (!distributorGroup.brands.has(brandKey)) {
+      distributorGroup.brands.set(brandKey, { displayName: brandName, items: [] })
+    }
+
+    const brandGroup = distributorGroup.brands.get(brandKey)
+    if (!brandGroup) continue
+
+    brandGroup.displayName = preferDisplayName(brandGroup.displayName, brandName)
+    brandGroup.items.push(item)
   }
 
-  return Array.from(distributorMap.entries())
-    .map(([name, brandMap]) => {
-      const brands = Array.from(brandMap.entries())
-        .map(([brandName, brandItems]) => ({
-          name: brandName,
-          items: brandItems.sort((a, b) => a.name.localeCompare(b.name)),
+  return Array.from(distributorMap.values())
+    .map((distributorGroup) => {
+      const brands = Array.from(distributorGroup.brands.values())
+        .map((brandGroup) => ({
+          name: brandGroup.displayName,
+          items: brandGroup.items.sort((a, b) => a.name.localeCompare(b.name)),
         }))
         .sort((a, b) => a.name.localeCompare(b.name))
 
       return {
-        name,
+        name: distributorGroup.displayName,
         itemsCount: brands.reduce((total, brand) => total + brand.items.length, 0),
         brands,
       }

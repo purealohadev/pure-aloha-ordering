@@ -185,10 +185,15 @@ const DISTRIBUTOR_BRAND_MATCHES = new Map<string, DistributorBrandMapEntry>(
 
 export function normalizeGroupKey(value: string) {
   return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/[™®©]/g, "")
     .trim()
     .toLowerCase()
     .replace(/[\u2018\u2019\u02BC\uFF07']/g, "")
-    .replace(/\s+/g, " ");
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 export function getDistributorFromBrand(brandName: string | null | undefined) {

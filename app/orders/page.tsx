@@ -160,11 +160,29 @@ function formatDaysRemaining(value: number | null | undefined) {
 }
 
 function creditKey(distributor: string, vendorName: string) {
-  return `${distributor}__${vendorName}`;
+  return `${normalizeMatchKey(distributor)}__${normalizeMatchKey(vendorName)}`;
 }
 
 function brandKey(distributor: string, brandName: string) {
-  return `${distributor}::${brandName}`;
+  return `${normalizeMatchKey(distributor)}::${normalizeMatchKey(brandName)}`;
+}
+
+function normalizeMatchKey(value: string | null | undefined) {
+  return (value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/[™®©]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function preferDisplayName(current: string | undefined, candidate: string) {
+  if (!current) return candidate;
+  if (current === current.toUpperCase() && candidate !== candidate.toUpperCase()) return candidate;
+  return current;
 }
 
 function sanitizeFilenamePart(value: string) {
@@ -343,31 +361,45 @@ function summarizeVendorTransactions(transactions: CreditTransaction[]): VendorC
 }
 
 function groupCreditTotals(transactions: CreditTransaction[]) {
-  const distributorMap = new Map<string, Map<string, CreditTransaction[]>>();
+  const distributorMap = new Map<
+    string,
+    { displayName: string; vendors: Map<string, { displayName: string; transactions: CreditTransaction[] }> }
+  >();
 
   for (const transaction of transactions) {
     const distributor = transaction.distributor || "Unknown Distributor";
     const vendorName = transaction.vendor_name || "Unknown Vendor";
+    const distributorKey = normalizeMatchKey(distributor);
+    const vendorKey = normalizeMatchKey(vendorName);
 
-    if (!distributorMap.has(distributor)) {
-      distributorMap.set(distributor, new Map());
+    if (!distributorMap.has(distributorKey)) {
+      distributorMap.set(distributorKey, { displayName: distributor, vendors: new Map() });
     }
 
-    const vendorMap = distributorMap.get(distributor);
-    if (!vendorMap) continue;
+    const distributorGroup = distributorMap.get(distributorKey);
+    if (!distributorGroup) continue;
 
-    if (!vendorMap.has(vendorName)) {
-      vendorMap.set(vendorName, []);
+    distributorGroup.displayName = preferDisplayName(distributorGroup.displayName, distributor);
+
+    if (!distributorGroup.vendors.has(vendorKey)) {
+      distributorGroup.vendors.set(vendorKey, { displayName: vendorName, transactions: [] });
     }
 
-    vendorMap.get(vendorName)?.push(transaction);
+    const vendorGroup = distributorGroup.vendors.get(vendorKey);
+    if (!vendorGroup) continue;
+
+    vendorGroup.displayName = preferDisplayName(vendorGroup.displayName, vendorName);
+    vendorGroup.transactions.push(transaction);
   }
 
   const totals = new Map<string, VendorCreditTotals>();
 
-  for (const [distributor, vendorMap] of distributorMap.entries()) {
-    for (const [vendorName, vendorTransactions] of vendorMap.entries()) {
-      totals.set(creditKey(distributor, vendorName), summarizeVendorTransactions(vendorTransactions));
+  for (const distributorGroup of distributorMap.values()) {
+    for (const vendorGroup of distributorGroup.vendors.values()) {
+      totals.set(
+        creditKey(distributorGroup.displayName, vendorGroup.displayName),
+        summarizeVendorTransactions(vendorGroup.transactions)
+      );
     }
   }
 
@@ -378,27 +410,49 @@ function groupRowsByDistributorAndBrand(
   rows: OrderRow[],
   creditTotals: Map<string, VendorCreditTotals>
 ): DistributorOrderGroup[] {
-  const distributorMap = new Map<string, Map<string, OrderRow[]>>();
+  const distributorMap = new Map<
+    string,
+    { displayName: string; brands: Map<string, { displayName: string; items: OrderRow[] }> }
+  >();
 
   for (const row of rows) {
-    const brandMap = distributorMap.get(row.vendor) ?? new Map<string, OrderRow[]>();
-    const brandItems = brandMap.get(row.brand_name) ?? [];
+    const distributorKey = normalizeMatchKey(row.vendor);
+    const brandKey = normalizeMatchKey(row.brand_name);
 
-    brandItems.push(row);
-    brandMap.set(row.brand_name, brandItems);
-    distributorMap.set(row.vendor, brandMap);
+    if (!distributorMap.has(distributorKey)) {
+      distributorMap.set(distributorKey, { displayName: row.vendor, brands: new Map() });
+    }
+
+    const distributorGroup = distributorMap.get(distributorKey);
+    if (!distributorGroup) continue;
+
+    distributorGroup.displayName = preferDisplayName(distributorGroup.displayName, row.vendor);
+
+    if (!distributorGroup.brands.has(brandKey)) {
+      distributorGroup.brands.set(brandKey, { displayName: row.brand_name, items: [] });
+    }
+
+    const brandGroup = distributorGroup.brands.get(brandKey);
+    if (!brandGroup) continue;
+
+    brandGroup.displayName = preferDisplayName(brandGroup.displayName, row.brand_name);
+    brandGroup.items.push(row);
   }
 
-  return Array.from(distributorMap.entries())
-    .map(([name, brandMap]) => {
-      const brands = Array.from(brandMap.entries())
-        .map(([brandName, items]) => ({
-          name: brandName,
-          items: items.sort(compareOrderPriority),
+  return Array.from(distributorMap.values())
+    .map((distributorGroup) => {
+      const brands = Array.from(distributorGroup.brands.values())
+        .map((brandGroup) => ({
+          name: brandGroup.displayName,
+          items: brandGroup.items.sort(compareOrderPriority),
         }))
         .sort((a, b) => {
-          const aHasCredit = (creditTotals.get(creditKey(name, a.name))?.availableCredit ?? 0) > 0;
-          const bHasCredit = (creditTotals.get(creditKey(name, b.name))?.availableCredit ?? 0) > 0;
+          const aHasCredit =
+            (creditTotals.get(creditKey(distributorGroup.displayName, a.name))?.availableCredit ??
+              0) > 0;
+          const bHasCredit =
+            (creditTotals.get(creditKey(distributorGroup.displayName, b.name))?.availableCredit ??
+              0) > 0;
 
           if (aHasCredit !== bHasCredit) return aHasCredit ? -1 : 1;
 
@@ -406,7 +460,7 @@ function groupRowsByDistributorAndBrand(
         });
 
       return {
-        name,
+        name: distributorGroup.displayName,
         itemsCount: brands.reduce((total, brand) => total + brand.items.length, 0),
         brands,
       };
@@ -415,28 +469,46 @@ function groupRowsByDistributorAndBrand(
 }
 
 function groupSelectedRowsByDistributorAndBrand(rows: OrderRow[]): SelectedItemGroup[] {
-  const distributorMap = new Map<string, Map<string, OrderRow[]>>();
+  const distributorMap = new Map<
+    string,
+    { displayName: string; brands: Map<string, { displayName: string; items: OrderRow[] }> }
+  >();
 
   for (const row of rows) {
-    const brandMap = distributorMap.get(row.vendor) ?? new Map<string, OrderRow[]>();
-    const brandItems = brandMap.get(row.brand_name) ?? [];
+    const distributorKey = normalizeMatchKey(row.vendor);
+    const brandKey = normalizeMatchKey(row.brand_name);
 
-    brandItems.push(row);
-    brandMap.set(row.brand_name, brandItems);
-    distributorMap.set(row.vendor, brandMap);
+    if (!distributorMap.has(distributorKey)) {
+      distributorMap.set(distributorKey, { displayName: row.vendor, brands: new Map() });
+    }
+
+    const distributorGroup = distributorMap.get(distributorKey);
+    if (!distributorGroup) continue;
+
+    distributorGroup.displayName = preferDisplayName(distributorGroup.displayName, row.vendor);
+
+    if (!distributorGroup.brands.has(brandKey)) {
+      distributorGroup.brands.set(brandKey, { displayName: row.brand_name, items: [] });
+    }
+
+    const brandGroup = distributorGroup.brands.get(brandKey);
+    if (!brandGroup) continue;
+
+    brandGroup.displayName = preferDisplayName(brandGroup.displayName, row.brand_name);
+    brandGroup.items.push(row);
   }
 
-  return Array.from(distributorMap.entries())
-    .map(([name, brandMap]) => {
-      const brands = Array.from(brandMap.entries())
-        .map(([brandName, items]) => ({
-          name: brandName,
-          items: items.sort(compareSelectedOrderPriority),
+  return Array.from(distributorMap.values())
+    .map((distributorGroup) => {
+      const brands = Array.from(distributorGroup.brands.values())
+        .map((brandGroup) => ({
+          name: brandGroup.displayName,
+          items: brandGroup.items.sort(compareSelectedOrderPriority),
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
 
       return {
-        name,
+        name: distributorGroup.displayName,
         itemsCount: brands.reduce((total, brand) => total + brand.items.length, 0),
         brands,
       };
@@ -726,7 +798,12 @@ export default function OrdersPage() {
   function addAllLowItems(distributorName: string) {
     setRows((prev) =>
       prev.map((row) => {
-        if (row.vendor !== distributorName || row.onHand > row.targetStock) return row;
+        if (
+          normalizeMatchKey(row.vendor) !== normalizeMatchKey(distributorName) ||
+          row.onHand > row.targetStock
+        ) {
+          return row;
+        }
 
         return {
           ...row,
@@ -740,7 +817,7 @@ export default function OrdersPage() {
   function clearDistributor(distributorName: string) {
     setRows((prev) =>
       prev.map((row) =>
-        row.vendor === distributorName
+        normalizeMatchKey(row.vendor) === normalizeMatchKey(distributorName)
           ? {
               ...row,
               orderQty: 0,
