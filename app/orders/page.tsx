@@ -77,6 +77,11 @@ type VendorCreditTotals = {
   availableCredit: number;
 };
 
+type CreditTotalsResult = {
+  exactTotals: Map<string, VendorCreditTotals>;
+  brandTotals: Map<string, VendorCreditTotals>;
+};
+
 type BrandOrderGroup = {
   name: string;
   items: OrderRow[];
@@ -161,6 +166,10 @@ function formatDaysRemaining(value: number | null | undefined) {
 
 function creditKey(distributor: string, vendorName: string) {
   return `${normalizeMatchKey(distributor)}__${normalizeMatchKey(vendorName)}`;
+}
+
+function creditBrandKey(vendorName: string) {
+  return normalizeMatchKey(vendorName);
 }
 
 function brandKey(distributor: string, brandName: string) {
@@ -360,7 +369,13 @@ function summarizeVendorTransactions(transactions: CreditTransaction[]): VendorC
   );
 }
 
-function groupCreditTotals(transactions: CreditTransaction[]) {
+function addCreditTotals(target: VendorCreditTotals, source: VendorCreditTotals) {
+  target.totalCredits += source.totalCredits;
+  target.totalReturns += source.totalReturns;
+  target.availableCredit += source.availableCredit;
+}
+
+function groupCreditTotals(transactions: CreditTransaction[]): CreditTotalsResult {
   const distributorMap = new Map<
     string,
     { displayName: string; vendors: Map<string, { displayName: string; transactions: CreditTransaction[] }> }
@@ -392,23 +407,32 @@ function groupCreditTotals(transactions: CreditTransaction[]) {
     vendorGroup.transactions.push(transaction);
   }
 
-  const totals = new Map<string, VendorCreditTotals>();
+  const exactTotals = new Map<string, VendorCreditTotals>();
+  const brandTotals = new Map<string, VendorCreditTotals>();
 
   for (const distributorGroup of distributorMap.values()) {
     for (const vendorGroup of distributorGroup.vendors.values()) {
-      totals.set(
-        creditKey(distributorGroup.displayName, vendorGroup.displayName),
-        summarizeVendorTransactions(vendorGroup.transactions)
-      );
+      const totals = summarizeVendorTransactions(vendorGroup.transactions);
+      const exactKey = creditKey(distributorGroup.displayName, vendorGroup.displayName);
+      const brandKey = creditBrandKey(vendorGroup.displayName);
+      const brandTotal = brandTotals.get(brandKey) ?? {
+        totalCredits: 0,
+        totalReturns: 0,
+        availableCredit: 0,
+      };
+
+      exactTotals.set(exactKey, totals);
+      addCreditTotals(brandTotal, totals);
+      brandTotals.set(brandKey, brandTotal);
     }
   }
 
-  return totals;
+  return { exactTotals, brandTotals };
 }
 
 function groupRowsByDistributorAndBrand(
   rows: OrderRow[],
-  creditTotals: Map<string, VendorCreditTotals>
+  creditTotals: CreditTotalsResult
 ): DistributorOrderGroup[] {
   const distributorMap = new Map<
     string,
@@ -448,11 +472,11 @@ function groupRowsByDistributorAndBrand(
         }))
         .sort((a, b) => {
           const aHasCredit =
-            (creditTotals.get(creditKey(distributorGroup.displayName, a.name))?.availableCredit ??
-              0) > 0;
+            getCreditTotalForBrand(creditTotals, distributorGroup.displayName, a.name)
+              .availableCredit > 0;
           const bHasCredit =
-            (creditTotals.get(creditKey(distributorGroup.displayName, b.name))?.availableCredit ??
-              0) > 0;
+            getCreditTotalForBrand(creditTotals, distributorGroup.displayName, b.name)
+              .availableCredit > 0;
 
           if (aHasCredit !== bHasCredit) return aHasCredit ? -1 : 1;
 
@@ -466,6 +490,21 @@ function groupRowsByDistributorAndBrand(
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getCreditTotalForBrand(
+  creditTotals: CreditTotalsResult,
+  distributor: string,
+  vendorName: string
+) {
+  return (
+    creditTotals.exactTotals.get(creditKey(distributor, vendorName)) ??
+    creditTotals.brandTotals.get(creditBrandKey(vendorName)) ?? {
+      totalCredits: 0,
+      totalReturns: 0,
+      availableCredit: 0,
+    }
+  );
 }
 
 function groupSelectedRowsByDistributorAndBrand(rows: OrderRow[]): SelectedItemGroup[] {
@@ -519,7 +558,10 @@ function groupSelectedRowsByDistributorAndBrand(rows: OrderRow[]): SelectedItemG
 export default function OrdersPage() {
   const [supabase] = useState(() => createClient());
   const [rows, setRows] = useState<OrderRow[]>([]);
-  const [creditTotals, setCreditTotals] = useState<Map<string, VendorCreditTotals>>(new Map());
+  const [creditTotals, setCreditTotals] = useState<CreditTotalsResult>({
+    exactTotals: new Map(),
+    brandTotals: new Map(),
+  });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [orderFilter, setOrderFilter] = useState<OrderFilter>("all");
@@ -724,7 +766,7 @@ export default function OrdersPage() {
   );
 
   function getAvailableCredit(distributor: string, vendorName: string) {
-    return creditTotals.get(creditKey(distributor, vendorName))?.availableCredit ?? 0;
+    return getCreditTotalForBrand(creditTotals, distributor, vendorName).availableCredit;
   }
 
   function toggleDistributor(distributor: string) {
